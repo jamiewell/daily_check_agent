@@ -1,0 +1,3 @@
+region           = "us-east-1"
+rds_password     = "your-secure-password-here"
+allowed_ssh_cidr = "YOUR_IP/32"
