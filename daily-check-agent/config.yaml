@@ -1,0 +1,22 @@
+ollama:
+  url: "http://localhost:11434/api/generate"
+  model: "qwen3"
+  temperature: 0.3
+  num_predict: 1024
+
+data:
+  sample_dir: "sample_data"
+  cpu_file: "cpu.json"
+  memory_file: "memory.json"
+  network_file: "network.json"
+
+thresholds:
+  cpu_warning: 70.0
+  cpu_critical: 90.0
+  memory_warning: 70.0
+  memory_critical: 85.0
+  network_warning: 100.0   # Mbps
+  network_critical: 500.0  # Mbps
+
+reports:
+  output_dir: "reports"
