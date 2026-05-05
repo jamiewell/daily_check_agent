@@ -27,6 +27,18 @@ def _resolve_sample_dir(cfg: dict, config_path: str) -> str:
     return os.path.join(base, cfg["data"]["sample_dir"])
 
 
+def _resolve_templates(cfg: dict, config_path: str) -> dict:
+    base = os.path.dirname(os.path.abspath(config_path))
+    tpl_dir = os.path.join(base, cfg.get("templates", {}).get("dir", "templates"))
+    tpl = cfg.get("templates", {})
+    return {
+        "dir": tpl_dir,
+        "prompt_analyze": tpl.get("prompt_analyze", "prompt_analyze.txt"),
+        "prompt_system":  tpl.get("prompt_system",  "prompt_system.txt"),
+        "report":         os.path.join(tpl_dir, tpl.get("report", "report.md.template")),
+    }
+
+
 def _print_llm_status(result, prefix: str = "") -> None:
     """LLM 응답 메타데이터를 한 줄 상태로 출력."""
     console.print(
@@ -36,12 +48,16 @@ def _print_llm_status(result, prefix: str = "") -> None:
     )
 
 
-def _make_llm(cfg: dict) -> OllamaClient:
+def _make_llm(cfg: dict, config_path: str) -> OllamaClient:
+    tpl = _resolve_templates(cfg, config_path)
     return OllamaClient(
         url=cfg["ollama"]["url"],
         model=cfg["ollama"]["model"],
         temperature=cfg["ollama"]["temperature"],
         num_predict=cfg["ollama"]["num_predict"],
+        templates_dir=tpl["dir"],
+        prompt_analyze_file=tpl["prompt_analyze"],
+        prompt_system_file=tpl["prompt_system"],
     )
 
 
@@ -71,7 +87,8 @@ def check(ctx, save):
     print_summary(summary, timestamp)
 
     if save:
-        path = save_report(summary, "(LLM 분석 생략)", timestamp, cfg["reports"]["output_dir"])
+        tpl = _resolve_templates(cfg, ctx.obj["config_path"])
+        path = save_report(summary, "(LLM 분석 생략)", timestamp, cfg["reports"]["output_dir"], tpl["report"])
         console.print(f"\n[dim]리포트 저장됨: {path}[/dim]")
 
 
@@ -89,14 +106,15 @@ def analyze(ctx, save):
     summary = summarize(raw, cfg["thresholds"])
     print_summary(summary, timestamp)
 
-    llm = _make_llm(cfg)
+    tpl = _resolve_templates(cfg, ctx.obj["config_path"])
+    llm = _make_llm(cfg, ctx.obj["config_path"])
     with console.status("[bold]Qwen3 분석 중...[/bold]", spinner="dots"):
         result = llm.analyze(summary)
     _print_llm_status(result)
     print_llm_analysis(str(result))
 
     if save:
-        path = save_report(summary, str(result), timestamp, cfg["reports"]["output_dir"])
+        path = save_report(summary, str(result), timestamp, cfg["reports"]["output_dir"], tpl["report"])
         console.print(f"[dim]리포트 저장됨: {path}[/dim]")
 
 
@@ -121,7 +139,8 @@ def chat(ctx):
     """대화형 AI 에이전트 — '일일점검' 키워드 입력 시 점검 실행"""
     cfg = ctx.obj["cfg"]
     sample_dir = _resolve_sample_dir(cfg, ctx.obj["config_path"])
-    llm = _make_llm(cfg)
+    tpl = _resolve_templates(cfg, ctx.obj["config_path"])
+    llm = _make_llm(cfg, ctx.obj["config_path"])
 
     messages = [
         {
@@ -169,7 +188,7 @@ def chat(ctx):
             messages.append({"role": "assistant", "content": str(result)})
             print_llm_analysis(str(result))
 
-            path = save_report(summary, str(result), timestamp, cfg["reports"]["output_dir"])
+            path = save_report(summary, str(result), timestamp, cfg["reports"]["output_dir"], tpl["report"])
             console.print(f"[dim]리포트 저장됨: {path}[/dim]\n")
             continue
 

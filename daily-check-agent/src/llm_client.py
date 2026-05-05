@@ -1,6 +1,7 @@
 """Ollama LLM client — supports both /api/generate and /api/chat endpoints."""
 
 import json
+import os
 import time
 import requests
 
@@ -20,13 +21,24 @@ class LLMResponse:
         return self.content
 
 
+def _load_template(path: str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
 class OllamaClient:
-    def __init__(self, url: str, model: str, temperature: float = 0.3, num_predict: int = 1024):
+    def __init__(self, url: str, model: str, temperature: float = 0.3, num_predict: int = 1024,
+                 templates_dir: str = "templates",
+                 prompt_analyze_file: str = "prompt_analyze.txt",
+                 prompt_system_file: str = "prompt_system.txt"):
         self.generate_url = url
         self.chat_url = url.replace(GENERATE_URL_SUFFIX, CHAT_URL_SUFFIX)
         self.model = model
         self.temperature = temperature
         self.num_predict = num_predict
+
+        self._prompt_analyze_tpl = _load_template(os.path.join(templates_dir, prompt_analyze_file))
+        self._prompt_system_tpl = _load_template(os.path.join(templates_dir, prompt_system_file))
 
     def analyze(self, summary: dict) -> LLMResponse:
         prompt = self._build_prompt(summary)
@@ -94,21 +106,8 @@ class OllamaClient:
 
     def _build_prompt(self, summary: dict) -> str:
         servers_text = json.dumps(summary, ensure_ascii=False, indent=2)
-        return f"""당신은 금융 IT 인프라 운영 전문가입니다.
-아래는 서버 일일점검 메트릭 요약입니다. 한국어로 간결하게 분석해주세요.
-
-{servers_text}
-
-다음 항목을 순서대로 작성하세요:
-1. 전체 상태 평가 (정상 / 주의 / 위험)
-2. 이상 항목 및 원인 추정
-3. 즉시 조치 필요 사항
-4. 모니터링 권고 사항
-"""
+        return self._prompt_analyze_tpl.format(servers_text=servers_text)
 
     def build_system_message(self, summary: dict) -> str:
         servers_text = json.dumps(summary, ensure_ascii=False, indent=2)
-        return f"""당신은 금융 IT 인프라 운영 전문가입니다. 한국어로 답변하세요.
-현재 서버 점검 데이터는 아래와 같습니다. 사용자의 질문에 이 데이터를 바탕으로 답변하세요.
-
-{servers_text}"""
+        return self._prompt_system_tpl.format(servers_text=servers_text)

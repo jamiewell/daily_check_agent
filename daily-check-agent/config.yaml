@@ -20,3 +20,9 @@ thresholds:
 
 reports:
   output_dir: "reports"
+
+templates:
+  dir: "templates"
+  prompt_analyze: "prompt_analyze.txt"   # LLM 분석 지시 프롬프트
+  prompt_system: "prompt_system.txt"     # LLM 시스템 역할 정의
+  report: "report.md.template"           # MD 리포트 양식
