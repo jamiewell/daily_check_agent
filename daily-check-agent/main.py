@@ -90,6 +90,64 @@ def analyze(ctx, save):
 
 @cli.command()
 @click.pass_context
+def chat(ctx):
+    """메트릭 로드 후 AI와 대화형 분석 (멀티턴 채팅)"""
+    cfg = ctx.obj["cfg"]
+    sample_dir = _resolve_sample_dir(cfg, ctx.obj["config_path"])
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    console.print("[bold]데이터 로딩 중...[/bold]")
+    raw = load_all(sample_dir)
+    summary = summarize(raw, cfg["thresholds"])
+
+    print_summary(summary, timestamp)
+
+    llm = OllamaClient(
+        url=cfg["ollama"]["url"],
+        model=cfg["ollama"]["model"],
+        temperature=cfg["ollama"]["temperature"],
+        num_predict=cfg["ollama"]["num_predict"],
+    )
+
+    # 시스템 메시지에 현재 메트릭 데이터 주입
+    messages = [
+        {"role": "system", "content": llm.build_system_message(summary)},
+    ]
+
+    # 첫 인사 — AI가 먼저 요약 분석 제공
+    console.print("\n[bold]AI 초기 분석 중...[/bold]")
+    messages.append({
+        "role": "user",
+        "content": "현재 서버 상태를 간략히 요약하고 주의사항을 알려줘."
+    })
+    first_reply = llm.chat(messages)
+    messages.append({"role": "assistant", "content": first_reply})
+    print_llm_analysis(first_reply)
+
+    console.print("[dim]─── 대화를 시작하세요. 종료: [bold]exit[/bold] 또는 [bold]quit[/bold] ───[/dim]\n")
+
+    while True:
+        try:
+            user_input = input("You > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]대화 종료.[/dim]")
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() in ("exit", "quit", "종료", "q"):
+            console.print("[dim]대화 종료.[/dim]")
+            break
+
+        messages.append({"role": "user", "content": user_input})
+        console.print("[dim]AI 응답 중...[/dim]")
+        reply = llm.chat(messages)
+        messages.append({"role": "assistant", "content": reply})
+        print_llm_analysis(reply)
+
+
+@cli.command()
+@click.pass_context
 def status(ctx):
     """Ollama 서버 연결 상태 확인"""
     import requests
