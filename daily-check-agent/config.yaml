@@ -1,3 +1,27 @@
+grafana:
+  url: "https://grafana.shinhancard.com:3000/api/ds/query"
+  token: "glsa_..."           # Service Account Token
+  ds_uid: "aenzqagld59fke"   # Prometheus datasource UID
+  ds_id: 157                  # Prometheus datasource ID
+  verify_ssl: false
+
+  # 인스턴스 필터 구성
+  # 명명 규칙: {env}{biz}{role}{number}
+  # env  : pr=운영, dv=개발, te=테스트
+  # biz  : aut=업무코드
+  # role : ap=애플리케이션서버, db=데이터베이스
+  instance:
+    env: "pr"
+    biz: "aut"
+    roles: ["ap"]       # ap / db / [ap, db] 복수 지정 가능
+    numbers: [1, 2]     # 인스턴스 번호 목록
+
+  # 시간 범위
+  window: "15m"         # PromQL 윈도우 크기 (5m / 15m / 1h)
+  range_minutes: 60     # 조회 범위: 최근 N분 (기본 1시간)
+  # from_ms:            # 직접 지정 시 range_minutes 무시 (epoch ms)
+  # to_ms:              # 직접 지정 시 현재 시각 무시 (epoch ms)
+
 ollama:
   url: "http://localhost:11434/api/generate"
   model: "qwen3"
