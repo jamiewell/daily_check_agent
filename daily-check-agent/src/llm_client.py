@@ -1,10 +1,23 @@
 """Ollama LLM client — supports both /api/generate and /api/chat endpoints."""
 
 import json
+import time
 import requests
 
 CHAT_URL_SUFFIX = "/api/chat"
 GENERATE_URL_SUFFIX = "/api/generate"
+
+
+class LLMResponse:
+    """LLM 응답 + 메타데이터 컨테이너"""
+    def __init__(self, content: str, prompt_tokens: int = 0, response_tokens: int = 0, elapsed: float = 0.0):
+        self.content = content
+        self.prompt_tokens = prompt_tokens
+        self.response_tokens = response_tokens
+        self.elapsed = elapsed
+
+    def __str__(self):
+        return self.content
 
 
 class OllamaClient:
@@ -15,8 +28,9 @@ class OllamaClient:
         self.temperature = temperature
         self.num_predict = num_predict
 
-    def analyze(self, summary: dict) -> str:
+    def analyze(self, summary: dict) -> LLMResponse:
         prompt = self._build_prompt(summary)
+        t0 = time.time()
         try:
             resp = requests.post(
                 self.generate_url,
@@ -32,16 +46,23 @@ class OllamaClient:
                 timeout=120,
             )
             resp.raise_for_status()
-            return resp.json().get("response", "").strip()
+            data = resp.json()
+            return LLMResponse(
+                content=data.get("response", "").strip(),
+                prompt_tokens=data.get("prompt_eval_count", 0),
+                response_tokens=data.get("eval_count", 0),
+                elapsed=time.time() - t0,
+            )
         except requests.exceptions.ConnectionError:
-            return "[LLM 오류] Ollama 서버에 연결할 수 없습니다. `ollama serve` 또는 `brew services start ollama`를 실행하세요."
+            return LLMResponse("[LLM 오류] Ollama 서버에 연결할 수 없습니다. `ollama serve` 또는 `brew services start ollama`를 실행하세요.")
         except requests.exceptions.Timeout:
-            return "[LLM 오류] Ollama 응답 시간 초과 (120초)."
+            return LLMResponse("[LLM 오류] Ollama 응답 시간 초과 (120초).")
         except Exception as e:
-            return f"[LLM 오류] {e}"
+            return LLMResponse(f"[LLM 오류] {e}")
 
-    def chat(self, messages: list) -> str:
+    def chat(self, messages: list) -> LLMResponse:
         """Multi-turn chat via /api/chat endpoint."""
+        t0 = time.time()
         try:
             resp = requests.post(
                 self.chat_url,
@@ -57,13 +78,19 @@ class OllamaClient:
                 timeout=120,
             )
             resp.raise_for_status()
-            return resp.json()["message"]["content"].strip()
+            data = resp.json()
+            return LLMResponse(
+                content=data["message"]["content"].strip(),
+                prompt_tokens=data.get("prompt_eval_count", 0),
+                response_tokens=data.get("eval_count", 0),
+                elapsed=time.time() - t0,
+            )
         except requests.exceptions.ConnectionError:
-            return "[LLM 오류] Ollama 서버에 연결할 수 없습니다."
+            return LLMResponse("[LLM 오류] Ollama 서버에 연결할 수 없습니다.")
         except requests.exceptions.Timeout:
-            return "[LLM 오류] Ollama 응답 시간 초과 (120초)."
+            return LLMResponse("[LLM 오류] Ollama 응답 시간 초과 (120초).")
         except Exception as e:
-            return f"[LLM 오류] {e}"
+            return LLMResponse(f"[LLM 오류] {e}")
 
     def _build_prompt(self, summary: dict) -> str:
         servers_text = json.dumps(summary, ensure_ascii=False, indent=2)

@@ -27,6 +27,24 @@ def _resolve_sample_dir(cfg: dict, config_path: str) -> str:
     return os.path.join(base, cfg["data"]["sample_dir"])
 
 
+def _print_llm_status(result, prefix: str = "") -> None:
+    """LLM 응답 메타데이터를 한 줄 상태로 출력."""
+    console.print(
+        f"[dim]{prefix}모델: {result.model if hasattr(result, 'model') else 'qwen3'} │ "
+        f"전송 {result.prompt_tokens}tok → 수신 {result.response_tokens}tok │ "
+        f"응답시간 {result.elapsed:.1f}초[/dim]"
+    )
+
+
+def _make_llm(cfg: dict) -> OllamaClient:
+    return OllamaClient(
+        url=cfg["ollama"]["url"],
+        model=cfg["ollama"]["model"],
+        temperature=cfg["ollama"]["temperature"],
+        num_predict=cfg["ollama"]["num_predict"],
+    )
+
+
 @click.group()
 @click.option("--config", default="config.yaml", show_default=True, help="설정 파일 경로")
 @click.pass_context
@@ -50,7 +68,6 @@ def check(ctx, save):
     console.print("[bold]데이터 로딩 중...[/bold]")
     raw = load_all(sample_dir)
     summary = summarize(raw, cfg["thresholds"])
-
     print_summary(summary, timestamp)
 
     if save:
@@ -70,22 +87,17 @@ def analyze(ctx, save):
     console.print("[bold]데이터 로딩 중...[/bold]")
     raw = load_all(sample_dir)
     summary = summarize(raw, cfg["thresholds"])
-
     print_summary(summary, timestamp)
 
-    console.print("\n[bold]AI 분석 중... (Ollama/Qwen3)[/bold]")
-    llm = OllamaClient(
-        url=cfg["ollama"]["url"],
-        model=cfg["ollama"]["model"],
-        temperature=cfg["ollama"]["temperature"],
-        num_predict=cfg["ollama"]["num_predict"],
-    )
-    analysis = llm.analyze(summary)
-    print_llm_analysis(analysis)
+    llm = _make_llm(cfg)
+    with console.status("[bold]Qwen3 분석 중...[/bold]", spinner="dots"):
+        result = llm.analyze(summary)
+    _print_llm_status(result)
+    print_llm_analysis(str(result))
 
     if save:
-        path = save_report(summary, analysis, timestamp, cfg["reports"]["output_dir"])
-        console.print(f"\n[dim]리포트 저장됨: {path}[/dim]")
+        path = save_report(summary, str(result), timestamp, cfg["reports"]["output_dir"])
+        console.print(f"[dim]리포트 저장됨: {path}[/dim]")
 
 
 CHECK_KEYWORDS = ("일일점검", "점검", "서버 점검", "check", "분석 시작", "점검 시작")
@@ -95,19 +107,21 @@ def _is_check_request(text: str) -> bool:
     return any(kw in text for kw in CHECK_KEYWORDS)
 
 
+def _build_check_context(llm: OllamaClient, summary: dict) -> str:
+    return (
+        f"다음은 방금 수집한 서버 점검 데이터야. 이 데이터를 바탕으로 이후 질문에 답해줘.\n\n"
+        f"{llm.build_system_message(summary)}\n\n"
+        f"점검 결과를 간략히 요약하고 주의사항을 알려줘."
+    )
+
+
 @cli.command()
 @click.pass_context
 def chat(ctx):
     """대화형 AI 에이전트 — '일일점검' 키워드 입력 시 점검 실행"""
     cfg = ctx.obj["cfg"]
     sample_dir = _resolve_sample_dir(cfg, ctx.obj["config_path"])
-
-    llm = OllamaClient(
-        url=cfg["ollama"]["url"],
-        model=cfg["ollama"]["model"],
-        temperature=cfg["ollama"]["temperature"],
-        num_predict=cfg["ollama"]["num_predict"],
-    )
+    llm = _make_llm(cfg)
 
     messages = [
         {
@@ -120,9 +134,12 @@ def chat(ctx):
     ]
 
     console.print("[bold cyan]일일점검 AI 에이전트[/bold cyan] 시작")
+    console.print(
+        f"[dim]모델: {cfg['ollama']['model']} │ "
+        f"온도: {cfg['ollama']['temperature']} │ "
+        f"최대 토큰: {cfg['ollama']['num_predict']}[/dim]"
+    )
     console.print("[dim]'일일점검' 또는 '점검' 입력 시 서버 점검을 실행합니다. 종료: exit[/dim]\n")
-
-    summary = None  # 점검 실행 전까지 None
 
     while True:
         try:
@@ -145,30 +162,24 @@ def chat(ctx):
             summary = summarize(raw, cfg["thresholds"])
             print_summary(summary, timestamp)
 
-            # 점검 결과를 시스템 컨텍스트에 주입 (기존 메시지 뒤에 추가)
-            messages.append({
-                "role": "user",
-                "content": (
-                    f"다음은 방금 수집한 서버 점검 데이터야. 이 데이터를 바탕으로 이후 질문에 답해줘.\n\n"
-                    f"{llm.build_system_message(summary)}\n\n"
-                    f"점검 결과를 간략히 요약하고 주의사항을 알려줘."
-                ),
-            })
-            console.print("[dim]AI 분석 중...[/dim]")
-            reply = llm.chat(messages)
-            messages.append({"role": "assistant", "content": reply})
-            print_llm_analysis(reply)
+            messages.append({"role": "user", "content": _build_check_context(llm, summary)})
+            with console.status("[bold]Qwen3 점검 분석 중...[/bold]", spinner="dots"):
+                result = llm.chat(messages)
+            _print_llm_status(result)
+            messages.append({"role": "assistant", "content": str(result)})
+            print_llm_analysis(str(result))
 
-            path = save_report(summary, reply, timestamp, cfg["reports"]["output_dir"])
+            path = save_report(summary, str(result), timestamp, cfg["reports"]["output_dir"])
             console.print(f"[dim]리포트 저장됨: {path}[/dim]\n")
             continue
 
         # 일반 대화
         messages.append({"role": "user", "content": user_input})
-        console.print("[dim]AI 응답 중...[/dim]")
-        reply = llm.chat(messages)
-        messages.append({"role": "assistant", "content": reply})
-        print_llm_analysis(reply)
+        with console.status("[bold]Qwen3 응답 중...[/bold]", spinner="dots"):
+            result = llm.chat(messages)
+        _print_llm_status(result)
+        messages.append({"role": "assistant", "content": str(result)})
+        print_llm_analysis(str(result))
 
 
 @cli.command()
