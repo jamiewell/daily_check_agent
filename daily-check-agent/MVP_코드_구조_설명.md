@@ -198,3 +198,115 @@ def load_all(grafana_url: str, token: str) -> dict:
         "network": fetch_network(grafana_url, token),  # API 호출
     }
 ```
+
+---
+
+## 9. OS별 구동 주의사항
+
+### 공통 사전 조건
+
+| 항목 | 내용 |
+|------|------|
+| Python | 3.12 이상 |
+| Ollama | 설치 및 서비스 실행 상태 |
+| qwen3 모델 | `ollama pull qwen3` 완료 |
+| 디스크 여유 | 6 GB 이상 (모델 5.2 GB + 여유) |
+
+---
+
+### macOS
+
+**세팅 순서**
+
+```bash
+# 1. 저장소 복제
+git clone https://github.com/jamiewell/daily_check_agent.git
+cd daily_check_agent/daily-check-agent
+
+# 2. 가상환경 생성 및 활성화
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 3. 패키지 설치
+pip install -r requirements.txt
+
+# 4. Ollama 서비스 시작
+brew services start ollama
+
+# 5. 실행
+python3 main.py chat
+```
+
+**주의사항**
+
+- `python3` 명령어 사용 (`python`은 미인식될 수 있음)
+- Homebrew 미설치 시 공식 Python 설치 파일 사용
+- Apple Silicon(M1/M2/M3)은 Unified Memory로 GPU 가속 자동 적용
+
+---
+
+### Windows
+
+**세팅 순서**
+
+```powershell
+# 1. 저장소 복제
+git clone https://github.com/jamiewell/daily_check_agent.git
+cd daily_check_agent\daily-check-agent
+
+# 2. 가상환경 생성 및 활성화
+python -m venv .venv
+.venv\Scripts\activate
+
+# 3. 패키지 설치
+pip install -r requirements.txt
+
+# 4. Ollama 실행 (별도 터미널 또는 백그라운드)
+ollama serve
+
+# 5. 실행
+python main.py chat
+```
+
+**주의사항**
+
+**① venv 활성화 오류 (PowerShell 실행 정책)**
+
+```powershell
+# 오류 발생 시 한 번만 실행
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+**② 한글 깨짐 (cmd / 구형 PowerShell)**
+
+```powershell
+# 실행 전 UTF-8로 전환
+chcp 65001
+```
+
+> Windows Terminal 또는 VSCode 내장 터미널은 UTF-8 기본값이라 설정 불필요.
+
+**③ Python 명령어 차이**
+
+| macOS | Windows |
+|-------|---------|
+| `python3 main.py chat` | `python main.py chat` |
+| `source .venv/bin/activate` | `.venv\Scripts\activate` |
+
+**④ Ollama Windows 설치**
+
+- 다운로드: `https://ollama.com/download/windows`
+- 설치 후 `ollama serve` 또는 시스템 트레이에서 자동 실행
+
+---
+
+### OS별 빠른 비교
+
+| 항목 | macOS | Windows |
+|------|-------|---------|
+| Python 명령어 | `python3` | `python` |
+| venv 활성화 | `source .venv/bin/activate` | `.venv\Scripts\activate` |
+| Ollama 시작 | `brew services start ollama` | `ollama serve` |
+| 한글 설정 | 불필요 | `chcp 65001` (cmd 한정) |
+| GPU 가속 | Metal (Apple Silicon 자동) | CUDA (NVIDIA GPU 자동) |
+| 권장 터미널 | iTerm2 / 기본 터미널 | Windows Terminal / VSCode |
