@@ -88,19 +88,19 @@ def analyze(ctx, save):
         console.print(f"\n[dim]리포트 저장됨: {path}[/dim]")
 
 
+CHECK_KEYWORDS = ("일일점검", "점검", "서버 점검", "check", "분석 시작", "점검 시작")
+
+
+def _is_check_request(text: str) -> bool:
+    return any(kw in text for kw in CHECK_KEYWORDS)
+
+
 @cli.command()
 @click.pass_context
 def chat(ctx):
-    """메트릭 로드 후 AI와 대화형 분석 (멀티턴 채팅)"""
+    """대화형 AI 에이전트 — '일일점검' 키워드 입력 시 점검 실행"""
     cfg = ctx.obj["cfg"]
     sample_dir = _resolve_sample_dir(cfg, ctx.obj["config_path"])
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    console.print("[bold]데이터 로딩 중...[/bold]")
-    raw = load_all(sample_dir)
-    summary = summarize(raw, cfg["thresholds"])
-
-    print_summary(summary, timestamp)
 
     llm = OllamaClient(
         url=cfg["ollama"]["url"],
@@ -109,22 +109,20 @@ def chat(ctx):
         num_predict=cfg["ollama"]["num_predict"],
     )
 
-    # 시스템 메시지에 현재 메트릭 데이터 주입
     messages = [
-        {"role": "system", "content": llm.build_system_message(summary)},
+        {
+            "role": "system",
+            "content": (
+                "당신은 금융 IT 인프라 운영 전문가입니다. 한국어로 답변하세요. "
+                "사용자가 '일일점검' 또는 '점검'을 요청하면 서버 메트릭 데이터를 분석합니다."
+            ),
+        }
     ]
 
-    # 첫 인사 — AI가 먼저 요약 분석 제공
-    console.print("\n[bold]AI 초기 분석 중...[/bold]")
-    messages.append({
-        "role": "user",
-        "content": "현재 서버 상태를 간략히 요약하고 주의사항을 알려줘."
-    })
-    first_reply = llm.chat(messages)
-    messages.append({"role": "assistant", "content": first_reply})
-    print_llm_analysis(first_reply)
+    console.print("[bold cyan]일일점검 AI 에이전트[/bold cyan] 시작")
+    console.print("[dim]'일일점검' 또는 '점검' 입력 시 서버 점검을 실행합니다. 종료: exit[/dim]\n")
 
-    console.print("[dim]─── 대화를 시작하세요. 종료: [bold]exit[/bold] 또는 [bold]quit[/bold] ───[/dim]\n")
+    summary = None  # 점검 실행 전까지 None
 
     while True:
         try:
@@ -139,6 +137,33 @@ def chat(ctx):
             console.print("[dim]대화 종료.[/dim]")
             break
 
+        # 점검 키워드 감지
+        if _is_check_request(user_input):
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            console.print("\n[bold]데이터 로딩 중...[/bold]")
+            raw = load_all(sample_dir)
+            summary = summarize(raw, cfg["thresholds"])
+            print_summary(summary, timestamp)
+
+            # 점검 결과를 시스템 컨텍스트에 주입 (기존 메시지 뒤에 추가)
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"다음은 방금 수집한 서버 점검 데이터야. 이 데이터를 바탕으로 이후 질문에 답해줘.\n\n"
+                    f"{llm.build_system_message(summary)}\n\n"
+                    f"점검 결과를 간략히 요약하고 주의사항을 알려줘."
+                ),
+            })
+            console.print("[dim]AI 분석 중...[/dim]")
+            reply = llm.chat(messages)
+            messages.append({"role": "assistant", "content": reply})
+            print_llm_analysis(reply)
+
+            path = save_report(summary, reply, timestamp, cfg["reports"]["output_dir"])
+            console.print(f"[dim]리포트 저장됨: {path}[/dim]\n")
+            continue
+
+        # 일반 대화
         messages.append({"role": "user", "content": user_input})
         console.print("[dim]AI 응답 중...[/dim]")
         reply = llm.chat(messages)
