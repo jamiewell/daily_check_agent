@@ -15,6 +15,7 @@ from src.data_loader import load_all
 from src.preprocessor import summarize
 from src.llm_client import OllamaClient
 from src.reporter import console, print_summary, print_llm_analysis, save_report
+from src import debug_logger as dbg
 
 
 def _load_config(config_path: str) -> dict:
@@ -63,10 +64,15 @@ def _make_llm(cfg: dict, config_path: str) -> OllamaClient:
 
 @click.group()
 @click.option("--config", default="config.yaml", show_default=True, help="설정 파일 경로")
+@click.option("--debug", is_flag=True, default=False, help="디버그 모드 (HTTP 통신·에러 상세 출력)")
 @click.pass_context
-def cli(ctx, config):
+def cli(ctx, config, debug):
     """금융시스템 일일점검 AI 에이전트"""
     ctx.ensure_object(dict)
+    if debug:
+        dbg.enable()
+        dbg.install_exception_hook()
+        console.print("[bold yellow][DEBUG MODE ON][/bold yellow]")
     cfg = _load_config(config)
     ctx.obj["cfg"] = cfg
     ctx.obj["config_path"] = config
@@ -199,6 +205,16 @@ def chat(ctx):
         _print_llm_status(result)
         messages.append({"role": "assistant", "content": str(result)})
         print_llm_analysis(str(result))
+
+
+@cli.command(name="debug")
+@click.pass_context
+def debug_cmd(ctx):
+    """전체 환경 진단 — 연결·패키지·파일·LLM 응답 일괄 점검"""
+    dbg.enable()
+    dbg.install_exception_hook()
+    from src.debug_logger import run_diagnostics
+    run_diagnostics(ctx.obj["cfg"], ctx.obj["config_path"])
 
 
 @cli.command()

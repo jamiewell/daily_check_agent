@@ -3,6 +3,8 @@
 import time
 import requests
 
+from src import debug_logger as dbg
+
 
 # ---------------------------------------------------------------------------
 # 인스턴스 필터 빌더
@@ -134,15 +136,23 @@ class GrafanaClient:
         }
 
     def _post(self, payload: dict) -> dict:
-        resp = requests.post(
-            self.url,
-            headers=self.headers,
-            json=payload,
-            verify=self.verify_ssl,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        dbg.log_request("Grafana /api/ds/query", self.url, payload)
+        t0 = time.time()
+        try:
+            resp = requests.post(
+                self.url,
+                headers=self.headers,
+                json=payload,
+                verify=self.verify_ssl,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            dbg.log_response("Grafana /api/ds/query", resp.status_code, data, time.time() - t0)
+            return data
+        except Exception as e:
+            dbg.log_error("Grafana API 오류", e)
+            raise
 
 
 # ---------------------------------------------------------------------------

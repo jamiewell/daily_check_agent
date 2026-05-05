@@ -5,6 +5,8 @@ import os
 import time
 import requests
 
+from src import debug_logger as dbg
+
 CHAT_URL_SUFFIX = "/api/chat"
 GENERATE_URL_SUFFIX = "/api/generate"
 
@@ -37,71 +39,72 @@ class OllamaClient:
         self.temperature = temperature
         self.num_predict = num_predict
 
+        dbg.log_step(f"템플릿 로드: {templates_dir}/{prompt_analyze_file}, {prompt_system_file}")
         self._prompt_analyze_tpl = _load_template(os.path.join(templates_dir, prompt_analyze_file))
-        self._prompt_system_tpl = _load_template(os.path.join(templates_dir, prompt_system_file))
+        self._prompt_system_tpl  = _load_template(os.path.join(templates_dir, prompt_system_file))
 
     def analyze(self, summary: dict) -> LLMResponse:
         prompt = self._build_prompt(summary)
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": self.temperature, "num_predict": self.num_predict},
+        }
+        dbg.log_request("Ollama /api/generate", self.generate_url, payload)
         t0 = time.time()
         try:
-            resp = requests.post(
-                self.generate_url,
-                json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "temperature": self.temperature,
-                        "num_predict": self.num_predict,
-                    },
-                },
-                timeout=120,
-            )
+            resp = requests.post(self.generate_url, json=payload, timeout=120)
             resp.raise_for_status()
             data = resp.json()
+            elapsed = time.time() - t0
+            dbg.log_response("Ollama /api/generate", resp.status_code, data, elapsed)
             return LLMResponse(
                 content=data.get("response", "").strip(),
                 prompt_tokens=data.get("prompt_eval_count", 0),
                 response_tokens=data.get("eval_count", 0),
-                elapsed=time.time() - t0,
+                elapsed=elapsed,
             )
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.ConnectionError as e:
+            dbg.log_error("Ollama ConnectionError", e)
             return LLMResponse("[LLM 오류] Ollama 서버에 연결할 수 없습니다. `ollama serve` 또는 `brew services start ollama`를 실행하세요.")
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as e:
+            dbg.log_error("Ollama Timeout", e)
             return LLMResponse("[LLM 오류] Ollama 응답 시간 초과 (120초).")
         except Exception as e:
+            dbg.log_error("Ollama 알 수 없는 오류", e)
             return LLMResponse(f"[LLM 오류] {e}")
 
     def chat(self, messages: list) -> LLMResponse:
         """Multi-turn chat via /api/chat endpoint."""
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": self.temperature, "num_predict": self.num_predict},
+        }
+        dbg.log_request("Ollama /api/chat", self.chat_url, payload)
         t0 = time.time()
         try:
-            resp = requests.post(
-                self.chat_url,
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "stream": False,
-                    "options": {
-                        "temperature": self.temperature,
-                        "num_predict": self.num_predict,
-                    },
-                },
-                timeout=120,
-            )
+            resp = requests.post(self.chat_url, json=payload, timeout=120)
             resp.raise_for_status()
             data = resp.json()
+            elapsed = time.time() - t0
+            dbg.log_response("Ollama /api/chat", resp.status_code, data, elapsed)
             return LLMResponse(
                 content=data["message"]["content"].strip(),
                 prompt_tokens=data.get("prompt_eval_count", 0),
                 response_tokens=data.get("eval_count", 0),
-                elapsed=time.time() - t0,
+                elapsed=elapsed,
             )
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.ConnectionError as e:
+            dbg.log_error("Ollama ConnectionError", e)
             return LLMResponse("[LLM 오류] Ollama 서버에 연결할 수 없습니다.")
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as e:
+            dbg.log_error("Ollama Timeout", e)
             return LLMResponse("[LLM 오류] Ollama 응답 시간 초과 (120초).")
         except Exception as e:
+            dbg.log_error("Ollama 알 수 없는 오류", e)
             return LLMResponse(f"[LLM 오류] {e}")
 
     def _build_prompt(self, summary: dict) -> str:
