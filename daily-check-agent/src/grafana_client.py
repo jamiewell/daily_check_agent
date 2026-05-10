@@ -2,6 +2,7 @@
 
 import time
 import requests
+from datetime import datetime, date, timedelta
 
 from src import debug_logger as dbg
 
@@ -66,6 +67,60 @@ def build_time_range(cfg: dict) -> tuple:
     return from_ms, to_ms
 
 
+def time_range(mode: str = "today", **kwargs) -> tuple:
+    """
+    조회 시간 범위 (from_ms, to_ms) 문자열 튜플 반환.
+
+    mode:
+      "realtime"  — 현재 기준 최근 N분        kwargs: minutes=5
+      "today"     — 오늘 00:00 ~ 현재
+      "yesterday" — 어제 00:00 ~ 23:59
+      "date"      — 특정 날짜 전체             kwargs: date="2025-05-01"
+      "range"     — 임의 구간                  kwargs: start="2025-05-01 09:00", end="2025-05-01 18:00"
+      "hours"     — 현재 기준 최근 N시간       kwargs: hours=6
+    """
+    now_ms = int(time.time() * 1000)
+
+    if mode == "realtime":
+        minutes = kwargs.get("minutes", 5)
+        return str(now_ms - minutes * 60 * 1000), str(now_ms)
+
+    elif mode == "today":
+        today = date.today()
+        start = int(datetime(today.year, today.month, today.day).timestamp() * 1000)
+        return str(start), str(now_ms)
+
+    elif mode == "yesterday":
+        yesterday = date.today() - timedelta(days=1)
+        start = int(datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0).timestamp() * 1000)
+        end   = int(datetime(yesterday.year, yesterday.month, yesterday.day, 23, 59, 59).timestamp() * 1000)
+        return str(start), str(end)
+
+    elif mode == "date":
+        dt    = datetime.strptime(kwargs["date"], "%Y-%m-%d")
+        start = int(dt.replace(hour=0, minute=0, second=0).timestamp() * 1000)
+        end   = int(dt.replace(hour=23, minute=59, second=59).timestamp() * 1000)
+        return str(start), str(end)
+
+    elif mode == "range":
+        start = int(datetime.strptime(kwargs["start"], "%Y-%m-%d %H:%M").timestamp() * 1000)
+        end   = int(datetime.strptime(kwargs["end"],   "%Y-%m-%d %H:%M").timestamp() * 1000)
+        return str(start), str(end)
+
+    elif mode == "hours":
+        hours = kwargs.get("hours", 1)
+        return str(now_ms - hours * 3600 * 1000), str(now_ms)
+
+    else:
+        raise ValueError(f"알 수 없는 mode: {mode}")
+
+
+def auto_interval(from_ms: str, to_ms: str, max_dp: int = 300) -> int:
+    """조회 범위에 따라 intervalMs 자동 계산. 최솟값 15초(15000ms) 보정."""
+    duration_ms = int(to_ms) - int(from_ms)
+    return max(duration_ms // max_dp, 15000)
+
+
 # ---------------------------------------------------------------------------
 # 공통 쿼리 실행
 # ---------------------------------------------------------------------------
@@ -87,10 +142,11 @@ class GrafanaClient:
         self.from_ms, self.to_ms = build_time_range(cfg)
 
     def query(self, expr: str, ref_id: str = "A",
-              interval_ms: int = 15000, max_dp: int = 300) -> dict:
+              interval_ms: int = 15000, max_dp: int = 300,
+              legend_format: str = "") -> dict:
         """단일 PromQL 쿼리 실행."""
         payload = {
-            "queries": [self._build_query(expr, ref_id, interval_ms, max_dp)],
+            "queries": [self._build_query(expr, ref_id, interval_ms, max_dp, legend_format)],
             "from": str(self.from_ms),
             "to": str(self.to_ms),
         }
@@ -101,7 +157,7 @@ class GrafanaClient:
         복수 쿼리 실행 (네트워크 Rx/Tx 등 multi-refId 패턴).
 
         queries: [
-            {"expr": "...", "ref_id": "A", "interval_ms": 15000, "max_dp": 376},
+            {"expr": "...", "ref_id": "A", "interval_ms": 15000, "max_dp": 376, "legend_format": "{{instance}}"},
             {"expr": "...", "ref_id": "B", "interval_ms": 15000, "max_dp": 376},
         ]
         """
@@ -112,6 +168,7 @@ class GrafanaClient:
                     q.get("ref_id", "A"),
                     q.get("interval_ms", 15000),
                     q.get("max_dp", 300),
+                    q.get("legend_format", ""),
                 )
                 for q in queries
             ],
@@ -121,8 +178,9 @@ class GrafanaClient:
         return self._post(payload)
 
     def _build_query(self, expr: str, ref_id: str,
-                     interval_ms: int, max_dp: int) -> dict:
-        return {
+                     interval_ms: int, max_dp: int,
+                     legend_format: str = "") -> dict:
+        q = {
             "datasource": {"type": "prometheus", "uid": self.ds_uid},
             "expr": expr,
             "refId": ref_id,
@@ -134,6 +192,9 @@ class GrafanaClient:
             "scopes": [],
             "adhocFilters": [],
         }
+        if legend_format:
+            q["legendFormat"] = legend_format
+        return q
 
     def _post(self, payload: dict) -> dict:
         dbg.log_request("Grafana /api/ds/query", self.url, payload)
@@ -176,8 +237,9 @@ def get_memory_usage(client: GrafanaClient) -> dict:
     f = client.instance_filter
     expr = (
         f'(1-(node_memory_MemFree_bytes{{instance=~"{f}"}}'
-        f'+node_memory_Cached_bytes+node_memory_Buffers_bytes)'
-        f'/node_memory_MemTotal_bytes)'
+        f'+node_memory_Cached_bytes{{instance=~"{f}"}}'
+        f'+node_memory_Buffers_bytes{{instance=~"{f}"}})'
+        f'/node_memory_MemTotal_bytes{{instance=~"{f}"}})'
     )
     return client.query(expr, ref_id="A", interval_ms=15000, max_dp=376)
 
@@ -186,13 +248,68 @@ def get_network_io(client: GrafanaClient) -> dict:
     """API-6 (SQR328): 네트워크 Rx/Tx. 응답 단위: bps → ÷1e6(Mbps) 필요."""
     f = client.instance_filter
     w = client.window
+    devices = "ens192|ens224"
     return client.multi_query([
         {
-            "expr": f'sum by(instance)(irate(node_network_receive_bytes_total{{instance=~"{f}",device!~"^lo"}}[{w}])*8)',
+            "expr": f'sum by(instance)(irate(node_network_receive_bytes_total{{instance=~"{f}",device=~"({devices})",device!~"^lo"}}[{w}])*8)',
             "ref_id": "A", "interval_ms": 15000, "max_dp": 376,
+            "legend_format": "{{instance}} - Rx",
         },
         {
-            "expr": f'sum by(instance)(irate(node_network_transmit_bytes_total{{instance=~"{f}",device!~"^lo"}}[{w}])*8)',
+            "expr": f'sum by(instance)(irate(node_network_transmit_bytes_total{{instance=~"{f}",device=~"({devices})",device!~"^lo"}}[{w}])*8)',
             "ref_id": "B", "interval_ms": 15000, "max_dp": 376,
+            "legend_format": "{{instance}} - Tx",
         },
     ])
+
+
+def get_disk_io(client: GrafanaClient) -> dict:
+    """CHECK-04: 디스크 Read/Write 속도. 응답 단위: bytes/s → ÷1e6 = MB/s."""
+    f = client.instance_filter
+    w = client.window
+    devices = "sda|sdb|sdc|sdd|sde|sdf"
+    return client.multi_query([
+        {
+            "expr": f'sum by(instance)(irate(node_disk_read_bytes_total{{instance=~"{f}",device=~"({devices})"}}[{w}]))',
+            "ref_id": "A", "interval_ms": 15000, "max_dp": 300,
+            "legend_format": "{{instance}} - Read",
+        },
+        {
+            "expr": f'sum by(instance)(irate(node_disk_written_bytes_total{{instance=~"{f}",device=~"({devices})"}}[{w}]))',
+            "ref_id": "B", "interval_ms": 15000, "max_dp": 300,
+            "legend_format": "{{instance}} - Write",
+        },
+    ])
+
+
+def get_process_count(client: GrafanaClient) -> dict:
+    """CHECK-05 (SQR325): 프로세스 수 가용성 감시. 응답 단위: 정수 (변환 불필요)."""
+    f = client.instance_filter
+    expr = f'namedprocess_namegroup_num_procs{{instance=~"{f}"}}'
+    return client.query(expr, ref_id="A", interval_ms=15000, max_dp=1,
+                        legend_format="{{groupname}} - {{instance}}")
+
+
+def get_process_cpu(client: GrafanaClient) -> dict:
+    """CHECK-06: 프로세스별 CPU 점유율. 응답 단위: 소수 → ×100 = %."""
+    f = client.instance_filter
+    expr = (
+        f'sum by(instance, groupname)(rate(namedprocess_namegroup_cpu_seconds_total{{instance=~"{f}"}}[2m]))'
+        f' / on(instance) group_left'
+        f' sum by(instance)(rate(node_cpu_seconds_total{{instance=~"{f}"}}[2m]))'
+    )
+    return client.query(expr, ref_id="A", interval_ms=15000, max_dp=300,
+                        legend_format="{{groupname}} [{{instance}}]")
+
+
+def get_process_memory(client: GrafanaClient) -> dict:
+    """CHECK-07 (SQR327): 프로세스별 메모리 점유율. 응답 단위: 소수 → ×100 = %."""
+    f = client.instance_filter
+    expr = (
+        f'sum(namedprocess_namegroup_memory_bytes{{instance=~"{f}",memtype="resident"}})'
+        f' by(instance, groupname)'
+        f' / on(instance) group_left'
+        f' sum(node_memory_MemTotal_bytes{{instance=~"{f}"}}) by(instance)'
+    )
+    return client.query(expr, ref_id="A", interval_ms=15000, max_dp=300,
+                        legend_format="{{groupname}} [{{instance}}]")

@@ -35,12 +35,18 @@ data:
   network_file: "network.json"
 
 thresholds:
-  cpu_warning: 70.0
-  cpu_critical: 90.0
-  memory_warning: 70.0
-  memory_critical: 85.0
-  network_warning: 100.0   # Mbps
-  network_critical: 500.0  # Mbps
+  cpu_warning: 80.0
+  cpu_critical: 95.0
+  memory_warning: 85.0
+  memory_critical: 95.0
+  network_warning: 150.0        # Mbps — CHECK-03 Rx 기준
+  network_critical: 200.0       # Mbps
+  disk_read_warning: 10.0       # MB/s — CHECK-04
+  disk_read_critical: 50.0      # MB/s
+  process_cpu_warning: 0.5      # % — CHECK-06 (ds_agent 기준)
+  process_cpu_critical: 0.8     # %
+  process_mem_warning: 1.0      # % — CHECK-07 (ds_agent 기준)
+  process_mem_critical: 2.0     # %
 
 reports:
   output_dir: "reports"

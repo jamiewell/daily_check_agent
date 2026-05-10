@@ -11,6 +11,9 @@
 
 1. [공통 호출 구조](#1-공통-호출-구조)
 2. [변수화 가능 영역 총정리](#2-변수화-가능-영역-총정리)
+   - [서버 대상 선택](#서버-대상-선택--instance-필터)
+   - [시간 범위 6가지 모드](#from--to-활용-방법--6가지-시간-범위-모드)
+   - [intervalMs 자동 계산](#intervalms--maxdatapoints-관계--자동-계산)
 3. [API별 상세 분석](#3-api별-상세-분석)
    - [API-1: CPU 사용률 (15분 윈도우)](#api-1-cpu-사용률-15분-윈도우--sqr292)
    - [API-2: CPU 사용률 (5분 윈도우)](#api-2-cpu-사용률-5분-윈도우--sqr293)
@@ -28,11 +31,15 @@
 ### 요청
 
 ```
-POST /api/ds/query?ds_type=prometheus&requestId={SQR번호}
+POST /api/ds/query
 Host: grafana.shinhancard.com:3000
 Authorization: Bearer {SERVICE_ACCOUNT_TOKEN}
 Content-Type: application/json
 ```
+
+> **URL 파라미터 (`ds_type`, `requestId`)는 생략 가능합니다.**  
+> - `?ds_type=prometheus` — Grafana UI가 내부 라우팅에 쓰는 힌트. 바디의 `datasource.type`으로 이미 명시되므로 없어도 동일하게 동작합니다.  
+> - `?requestId=SQR292` — Grafana 대시보드가 **어떤 패널이 보낸 요청인지 추적하려고 붙이는 UI 내부용 식별자**입니다. 서버(Prometheus)는 이 값을 완전히 무시합니다. 직접 호출 시 URL에서 제거해도 응답은 동일합니다.
 
 ### 기본 요청 바디 구조
 
@@ -44,24 +51,44 @@ Content-Type: application/json
         "type": "prometheus",
         "uid": "{datasource_uid}"
       },
-      "expr":         "{PromQL 표현식}",
-      "refId":        "{단일 알파벳, A~Z}",
-      "requestId":    "{숫자+refId}",
-      "range":        true,
-      "editorMode":   "code",
-      "legendFormat": "{레전드 포맷}",
-      "intervalMs":   15000,
+      "expr":          "{PromQL 표현식}",
+      "refId":         "{단일 알파벳, A~Z}",
+      "range":         true,
+      "intervalMs":    15000,
       "maxDataPoints": 300,
-      "datasourceId": 157,
-      "utcOffsetSec": 32400,
-      "scopes":       [],
-      "adhocFilters": []
+      "datasourceId":  157,
+      "utcOffsetSec":  32400,
+
+      "requestId":     "{생략 가능 — Grafana UI 추적용, 서버 무시}",
+      "legendFormat":  "{{instance}}",
+      "scopes":        [],
+      "adhocFilters":  [],
+      "interval":      "",
+      "exemplar":      false
     }
   ],
-  "from": "{Unix ms 타임스탬프 또는 'now-5m'}",
-  "to":   "{Unix ms 타임스탬프 또는 'now'}"
+  "from": "{Unix ms 타임스탬프}",
+  "to":   "{Unix ms 타임스탬프}"
 }
 ```
+
+> **실제 직접 호출 시 최소 구성 (requestId 등 생략)**
+>
+> ```json
+> {
+>   "queries": [{
+>     "datasource": {"type": "prometheus", "uid": "aenzqagld59fke"},
+>     "expr":       "{PromQL}",
+>     "refId":      "A",
+>     "intervalMs": 300000,
+>     "maxDataPoints": 300,
+>     "datasourceId": 157,
+>     "range": true
+>   }],
+>   "from": "1778175000000",
+>   "to":   "1778261637000"
+> }
+> ```
 
 ### 응답 구조
 
@@ -105,42 +132,182 @@ Content-Type: application/json
 | 파라미터 | 위치 | 설명 | 변수 예시 |
 |---|---|---|---|
 | `SERVICE_ACCOUNT_TOKEN` | Header | Bearer 인증 토큰 | `glsa_xxx...` |
-| `ds_type` | Query String | 데이터소스 타입 | `prometheus`, `loki` |
-| `requestId` | Query String | 요청 식별자 (임의값 가능) | `SQR001`, `MY_REQ_1` |
-| `datasource.uid` | Body | Datasource UID | `aenzqagld59fke` |
-| `datasourceId` | Body | Datasource 숫자 ID | `157` |
-| `expr` | Body | **PromQL 표현식** | 자유롭게 작성 가능 |
-| `refId` | Body | 결과 키값 (A~Z) | `A`, `B`, `C` |
+| `ds_type` | Query String | ❌ **생략 가능** — 바디의 `datasource.type`과 중복 | `prometheus` |
+| `requestId` | Query String | ❌ **생략 가능** — Grafana UI 내부 추적용. 서버는 무시 | `SQR001` |
+| `queries[].requestId` | Body | ❌ **생략 가능** — URL의 requestId와 동일한 UI 추적용 | `4A` |
+| `datasource.uid` | Body | ✅ **필수** — 어떤 데이터소스인지 식별 | `aenzqagld59fke` |
+| `datasourceId` | Body | ✅ **권장** — uid와 함께 있으면 안정적 | `157` |
+| `expr` | Body | ✅ **필수** — PromQL 표현식 | 자유롭게 작성 가능 |
+| `refId` | Body | ✅ **필수** — 응답 파싱 키 (A~Z) | `A`, `B`, `C` |
+| `from` / `to` | Body | ✅ **필수** — 조회 시간 범위 (Unix ms) | `str(now_ms)` |
 | `legendFormat` | Body | 응답 레전드 포맷 | `{{instance}}`, `{{groupname}}` |
-| `intervalMs` | Body | 스크래핑 간격 (ms) | `5000`, `15000`, `60000` |
+| `intervalMs` | Body | 수집 간격 (ms) | `15000`, `300000` |
 | `maxDataPoints` | Body | 최대 데이터 포인트 수 | `100` ~ `1000` |
-| `from` | Body | 조회 시작 시각 (Unix ms) | `int(time.time()-3600)*1000` |
-| `to` | Body | 조회 종료 시각 (Unix ms) | `int(time.time())*1000` |
 | `range` | Body | 시계열 범위 조회 여부 | `true` (시계열) / `false` (instant) |
 | `instant` | Body | 현재값 단일 조회 | `true`로 설정 시 최신값 1개만 반환 |
 | `utcOffsetSec` | Body | 타임존 오프셋 | `32400` (KST=UTC+9) |
+| `exemplar` / `scopes` / `adhocFilters` / `interval` | Body | ❌ **생략 가능** — Grafana UI 내부용 | `false`, `[]`, `[]`, `""` |
 
-### `from` / `to` 활용 방법
+> **최소 필수 파라미터 요약:** `datasource.uid` + `expr` + `refId` + `from` + `to`  
+> 이 5개만 있으면 동작합니다. 나머지는 모두 선택입니다.
+
+### 서버 대상 선택 — `instance` 필터
+
+#### 호스트명 명명 규칙
+
+운영 환경의 호스트명은 아래 4개 요소의 조합으로 구성됩니다.
+
+```
+{환경}{업무코드}{서버역할}{번호}
+
+예:  pr  aut  ap  1
+     │    │    │   └─ 서버 번호 (1, 2, 3, 4 ...)
+     │    │    └───── 서버 역할 (ap=애플리케이션, db=데이터베이스)
+     │    └────────── 업무 코드 (aut=승인, 그 외 업무코드 추가 가능)
+     └─────────────── 환경 구분 (pr=운영, te=테스트, dv=개발)
+```
+
+| 구분 | 값 | 의미 |
+|---|---|---|
+| **환경** | `pr` | 운영 (Production) |
+| | `te` | 테스트 (Test) |
+| | `dv` | 개발 (Development) |
+| **업무코드** | `aut` | 카드 승인 업무 |
+| **서버역할** | `ap` | 애플리케이션 서버 |
+| | `db` | 데이터베이스 서버 |
+| **번호** | `1`, `2`, `3` ... | 서버 번호 (HA/이중화) |
+
+**호스트명 예시:**
+
+| 호스트명 | 환경 | 업무 | 역할 | 번호 |
+|---|---|---|---|---|
+| `prautap1` | 운영(pr) | 승인(aut) | AP | 1 |
+| `prautap2` | 운영(pr) | 승인(aut) | AP | 2 |
+| `prautdb1` | 운영(pr) | 승인(aut) | DB | 1 |
+| `teautap1` | 테스트(te) | 승인(aut) | AP | 1 |
+| `dvautap1` | 개발(dv) | 승인(aut) | AP | 1 |
+
+#### 서버 필터 생성
+
+`expr` 안의 `instance=~"..."` 정규식만 바꾸면 환경/업무/역할/번호를 자유롭게 조합할 수 있습니다.
+
+```python
+def make_instance_filter(
+    env:   str  = "pr",    # 환경: pr / te / dv
+    app:   str  = "aut",   # 업무코드: aut / ...
+    roles: list = None,    # 역할: ["ap"] / ["db"] / ["ap","db"] / None=전체
+    nums:  list = None,    # 번호: [1] / [1,2] / None=전체
+) -> str:
+    """
+    사용 예:
+        make_instance_filter("pr", "aut", ["ap"])        → "prautap[0-9]+"
+        make_instance_filter("pr", "aut", ["db"])        → "prautdb[0-9]+"
+        make_instance_filter("pr", "aut")                → "praut(ap|db)[0-9]+"
+        make_instance_filter("pr", "aut", ["ap"], [1])   → "prautap1"
+        make_instance_filter("pr", "aut", ["ap"], [1,2]) → "prautap1|prautap2"
+        make_instance_filter("te", "aut", ["ap"])        → "teautap[0-9]+"
+        make_instance_filter("dv", "aut")                → "dvaut(ap|db)[0-9]+"
+    """
+    if roles is None:
+        roles = ["ap", "db"]
+
+    if nums is not None:
+        hosts = [f"{env}{app}{role}{n}" for role in roles for n in nums]
+        return "|".join(hosts)
+    else:
+        if len(roles) == 1:
+            return f"{env}{app}{roles[0]}[0-9]+"
+        else:
+            role_pattern = "|".join(roles)
+            return f"{env}{app}({role_pattern})[0-9]+"
+
+# ── 자주 쓰는 조합 ───────────────────────────────────────
+instance = make_instance_filter("pr", "aut", ["ap"])          # 운영 AP 전체
+instance = make_instance_filter("pr", "aut", ["db"])          # 운영 DB 전체
+instance = make_instance_filter("pr", "aut")                  # 운영 전체
+instance = make_instance_filter("pr", "aut", ["ap"], [1])     # 운영 AP 1번만
+instance = make_instance_filter("pr", "aut", ["ap"], [1, 2])  # 운영 AP 1,2번
+instance = make_instance_filter("te", "aut")                  # 테스트 전체
+instance = make_instance_filter("dv", "aut", ["ap"])          # 개발 AP 전체
+```
+
+PromQL expr 안에 적용하는 방법입니다.
+
+```python
+instance = make_instance_filter("pr", "aut", ["ap"])
+# → "prautap[0-9]+"
+
+expr = f'node_cpu_seconds_total{{instance=~"{instance}",mode!="idle"}}'
+# → node_cpu_seconds_total{instance=~"prautap[0-9]+",mode!="idle"}
+```
+
+---
+
+### `from` / `to` 활용 방법 — 6가지 시간 범위 모드
 
 ```python
 import time
+from datetime import datetime, date, timedelta
 
-# 방법 1: Unix milliseconds 직접 계산
-now_ms       = int(time.time() * 1000)
-one_hour_ago = now_ms - (60 * 60 * 1000)
-one_day_ago  = now_ms - (24 * 60 * 60 * 1000)
+def time_range(mode: str = "today", **kwargs) -> tuple:
+    """
+    mode 목록:
+        "realtime"   → 현재 기준 최근 N분       (기본 5분)
+        "today"      → 오늘 00:00 ~ 현재
+        "yesterday"  → 어제 00:00 ~ 23:59
+        "date"       → 특정 날짜 전체            (date="2025-05-01")
+        "range"      → 임의 구간                 (start="2025-05-01 09:00", end="2025-05-01 18:00")
+        "hours"      → 현재 기준 최근 N시간      (hours=6)
+    반환: (from_ms, to_ms) 문자열 튜플
+    """
+    now_ms = int(time.time() * 1000)
 
-# 방법 2: Grafana 상대 시간 문자열 (일부 버전 지원)
-"from": "now-1h",
-"to":   "now"
+    if mode == "realtime":
+        minutes = kwargs.get("minutes", 5)
+        return str(now_ms - minutes * 60 * 1000), str(now_ms)
 
-# 방법 3: 특정 날짜/시간 지정
-from datetime import datetime
-dt = datetime(2025, 5, 1, 9, 0, 0)
-ms = int(dt.timestamp() * 1000)
+    elif mode == "today":
+        today = date.today()
+        start = int(datetime(today.year, today.month, today.day).timestamp() * 1000)
+        return str(start), str(now_ms)
+
+    elif mode == "yesterday":
+        yesterday = date.today() - timedelta(days=1)
+        start = int(datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0).timestamp() * 1000)
+        end   = int(datetime(yesterday.year, yesterday.month, yesterday.day, 23, 59, 59).timestamp() * 1000)
+        return str(start), str(end)
+
+    elif mode == "date":
+        dt    = datetime.strptime(kwargs["date"], "%Y-%m-%d")
+        start = int(dt.replace(hour=0, minute=0, second=0).timestamp() * 1000)
+        end   = int(dt.replace(hour=23, minute=59, second=59).timestamp() * 1000)
+        return str(start), str(end)
+
+    elif mode == "range":
+        start = int(datetime.strptime(kwargs["start"], "%Y-%m-%d %H:%M").timestamp() * 1000)
+        end   = int(datetime.strptime(kwargs["end"],   "%Y-%m-%d %H:%M").timestamp() * 1000)
+        return str(start), str(end)
+
+    elif mode == "hours":
+        hours = kwargs.get("hours", 1)
+        return str(now_ms - hours * 3600 * 1000), str(now_ms)
+
+    else:
+        raise ValueError(f"알 수 없는 mode: {mode}")
+
+# 사용 예
+from_ms, to_ms = time_range("realtime", minutes=5)                          # 최근 5분
+from_ms, to_ms = time_range("today")                                         # 오늘 전체
+from_ms, to_ms = time_range("yesterday")                                     # 어제 전체
+from_ms, to_ms = time_range("date", date="2025-05-01")                       # 특정 날짜
+from_ms, to_ms = time_range("range", start="2025-05-01 13:00",
+                                      end="2025-05-01 15:00")                # 임의 구간
+from_ms, to_ms = time_range("hours", hours=6)                                # 최근 6시간
 ```
 
-### `intervalMs` / `maxDataPoints` 관계
+---
+
+### `intervalMs` / `maxDataPoints` 관계 — 자동 계산
 
 ```
 step(초) ≈ (to - from) ms / maxDataPoints / 1000
@@ -149,6 +316,32 @@ step(초) ≈ (to - from) ms / maxDataPoints / 1000
   범위 5분(300초), maxDataPoints=300 → step ≈ 1초
   범위 5분(300초), maxDataPoints=21  → step ≈ 15초
 ```
+
+조회 범위가 달라질 때 `intervalMs`도 함께 조정하지 않으면 포인트 수가 폭발합니다.  
+아래 함수로 자동 계산할 수 있습니다.
+
+```python
+def auto_interval(from_ms: str, to_ms: str, max_dp: int = 300) -> int:
+    """조회 범위에 따라 intervalMs 자동 계산 (최솟값 15초 보정)"""
+    duration_ms = int(to_ms) - int(from_ms)
+    step_ms     = duration_ms // max_dp
+    return max(step_ms, 15000)   # 15초 미만이면 15초로 보정
+
+# 사용 예 — 조회 범위와 상관없이 항상 적정 step 유지
+from_ms, to_ms  = time_range("date", date="2025-05-01")
+interval_ms     = auto_interval(from_ms, to_ms)   # 자동으로 ~5분 step
+```
+
+### 조회 범위별 권장 설정
+
+| 조회 범위 | 권장 intervalMs | 권장 maxDataPoints | 결과 step |
+|---|---|---|---|
+| 5분 이내 (실시간) | `15,000` | `300` | ~1초 |
+| 1시간 | `60,000` | `300` | ~12초 |
+| 6시간 | `60,000` | `300` | ~1분 |
+| 24시간 (오늘/어제) | `300,000` | `300` | ~5분 |
+| 2~7일 | `3,600,000` | `300` | ~1시간 |
+| 1개월 | `3,600,000` | `720` | ~1시간 |
 
 ---
 
@@ -622,55 +815,121 @@ CPU 스파이크 감지 (API-2)
 
 ## 5. Python 파이프라인 활용 예시
 
-### 전체 파이프라인 통합 호출
+### 공통 설정 및 빌더
 
 ```python
 import requests
 import time
+from datetime import datetime, date, timedelta
 
 GRAFANA_URL = "https://grafana.shinhancard.com:3000/api/ds/query"
 TOKEN       = "glsa_cpeM80mba6oAaeh1TRZdfQ8BcnC69L4F_b2d9b460"
 DS_UID      = "aenzqagld59fke"
 DS_ID       = 157
-INSTANCES   = "(prautap1|prautdb1)"
 
 HEADERS = {
     "Authorization": f"Bearer {TOKEN}",
     "Content-Type": "application/json"
 }
 
-def make_time_range(minutes: int = 5):
-    now = int(time.time() * 1000)
-    return str(now - minutes * 60 * 1000), str(now)
+# 섹션 2의 make_instance_filter(), time_range(), auto_interval() 함수 포함 가정
 
-def query(expr: str, ref_id: str = "A",
-          minutes: int = 5, interval_ms: int = 15000,
-          max_dp: int = 300) -> dict:
-    from_ms, to_ms = make_time_range(minutes)
-    payload = {
-        "queries": [{
-            "datasource": {"type": "prometheus", "uid": DS_UID},
-            "expr": expr,
-            "refId": ref_id,
-            "range": True,
-            "intervalMs": interval_ms,
-            "maxDataPoints": max_dp,
-            "datasourceId": DS_ID,
-            "utcOffsetSec": 32400,
-            "scopes": [],
-            "adhocFilters": []
-        }],
-        "from": from_ms,
-        "to":   to_ms
+def build_query(expr, ref_id="A", legend="{{instance}}",
+                interval_ms=300000, max_dp=300):
+    """공통 쿼리 객체 생성"""
+    return {
+        "datasource":    {"type": "prometheus", "uid": DS_UID},
+        "expr":          expr,
+        "refId":         ref_id,
+        "legendFormat":  legend,
+        "range":         True,
+        "intervalMs":    interval_ms,
+        "maxDataPoints": max_dp,
+        "datasourceId":  DS_ID,
+        "utcOffsetSec":  32400,
+        "scopes":        [],
+        "adhocFilters":  [],
+        "interval":      ""
     }
+
+def call_api(queries: list, from_ms: str, to_ms: str) -> dict:
+    payload = {"queries": queries, "from": from_ms, "to": to_ms}
     resp = requests.post(GRAFANA_URL, headers=HEADERS,
                          json=payload, verify=False)
     return resp.json()
+```
 
-# 사용 예시
-cpu_data  = query(f'(sum by(instance)(irate(node_cpu_seconds_total{{instance=~"{INSTANCES}",mode!="idle"}}[5m]))/on(instance) group_left sum by(instance)(irate(node_cpu_seconds_total{{instance=~"{INSTANCES}"}}[5m])))*100')
-mem_data  = query(f'(1-(node_memory_MemFree_bytes{{instance=~"{INSTANCES}"}}+node_memory_Cached_bytes+node_memory_Buffers_bytes)/node_memory_MemTotal_bytes)')
-proc_data = query(f'namedprocess_namegroup_num_procs{{instance=~"{INSTANCES}"}}')
+### 서버 대상 + 시간 범위 조합 예시
+
+```python
+# ── 대상 서버 선택 ─────────────────────────────────────
+instance = make_instance_filter("ap")           # AP서버만
+instance = make_instance_filter("db")           # DB서버만
+instance = make_instance_filter("ap", "db")     # AP + DB 동시
+instance = make_instance_filter("all")          # 전체
+
+# ── 시간 범위 선택 ─────────────────────────────────────
+from_ms, to_ms = time_range("realtime", minutes=5)                       # 최근 5분
+from_ms, to_ms = time_range("today")                                      # 오늘 전체
+from_ms, to_ms = time_range("yesterday")                                  # 어제 전체
+from_ms, to_ms = time_range("date", date="2025-05-01")                    # 특정 날짜
+from_ms, to_ms = time_range("range",
+                             start="2025-05-01 13:00",
+                             end="2025-05-01 15:00")                      # 임의 구간
+from_ms, to_ms = time_range("hours", hours=6)                             # 최근 6시간
+
+# ── intervalMs 자동 계산 ────────────────────────────────
+interval_ms = auto_interval(from_ms, to_ms)   # 범위에 맞는 step 자동 결정
+
+# ── 쿼리 조합 및 호출 ───────────────────────────────────
+cpu_q  = build_query(
+    f'(sum by(instance)(irate(node_cpu_seconds_total{{instance=~"{instance}",mode!="idle"}}[5m]))'
+    f' / on(instance) group_left sum by(instance)(irate(node_cpu_seconds_total{{instance=~"{instance}"}}[5m]))) * 100',
+    interval_ms=interval_ms
+)
+mem_q  = build_query(
+    f'(1-(node_memory_MemFree_bytes{{instance=~"{instance}"}}+node_memory_Cached_bytes+node_memory_Buffers_bytes)/node_memory_MemTotal_bytes)',
+    interval_ms=interval_ms
+)
+proc_q = build_query(
+    f'namedprocess_namegroup_num_procs{{instance=~"{instance}"}}',
+    legend="{{groupname}} - {{instance}}",
+    interval_ms=interval_ms
+)
+
+# 단일 호출로 여러 메트릭 동시 수집 (queries 배열에 조합)
+raw = call_api([cpu_q, mem_q, proc_q], from_ms, to_ms)
+
+# 결과 파싱 — refId로 분리
+cpu_frames  = raw["results"]["A"]["frames"]
+mem_frames  = raw["results"]["A"]["frames"]   # 별도 refId 설정 시 분리
+proc_frames = raw["results"]["A"]["frames"]
+```
+
+### 실전 조합 시나리오
+
+```python
+# 시나리오 1: AP서버 오늘 하루 CPU/메모리 트렌드
+instance = make_instance_filter("ap")
+from_ms, to_ms = time_range("today")
+interval_ms = auto_interval(from_ms, to_ms)   # → 300,000 (5분)
+
+# 시나리오 2: AP+DB 어제 장애 구간 집중 분석
+instance = make_instance_filter("ap", "db")
+from_ms, to_ms = time_range("range",
+                             start="2025-05-01 13:00",
+                             end="2025-05-01 15:00")
+interval_ms = auto_interval(from_ms, to_ms)   # → 24,000 (24초)
+
+# 시나리오 3: DB서버 최근 6시간 프로세스 감시
+instance = make_instance_filter("db")
+from_ms, to_ms = time_range("hours", hours=6)
+interval_ms = auto_interval(from_ms, to_ms)   # → 72,000 (72초)
+
+# 시나리오 4: 전체 서버 실시간 5분 스냅샷
+instance = make_instance_filter("all")
+from_ms, to_ms = time_range("realtime", minutes=5)
+interval_ms = 15000                           # 실시간은 15초 고정
 ```
 
 ### Prometheus 메트릭 탐색 (대시보드 없이)
@@ -691,4 +950,6 @@ print(resp.json())
 
 ---
 
-*작성 기준: Chrome DevTools 캡처 API 분석 결과 (SQR292~SQR328)*
+*작성 기준: Chrome DevTools 캡처 API 분석 결과 (SQR203~SQR328)*  
+*지원 서버: prautap1 (AP), prautdb1 (DB) — 단일/복수/전체 자유 선택*  
+*시간 범위: realtime / today / yesterday / date / range / hours 6가지 모드 지원*
