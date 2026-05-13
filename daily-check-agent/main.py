@@ -8,8 +8,10 @@ from datetime import datetime
 import click
 import yaml
 
-# Allow running from project root without installing package
-sys.path.insert(0, os.path.dirname(__file__))
+# Allow running from project root without installing package (dev mode only)
+# PyInstaller frozen builds handle sys.path automatically via bundled modules
+if not getattr(sys, 'frozen', False):
+    sys.path.insert(0, os.path.dirname(__file__))
 
 from src.data_loader import load_all
 from src.preprocessor import summarize

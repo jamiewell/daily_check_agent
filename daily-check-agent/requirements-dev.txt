@@ -1,0 +1,4 @@
+# 개발·빌드 전용 의존성 (배포 대상에는 불필요)
+-r requirements.txt
+
+pyinstaller>=6.0

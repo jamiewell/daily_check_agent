@@ -4,3 +4,7 @@ __pycache__/
 .DS_Store
 reports/
 .venv/
+# PyInstaller 빌드 산출물
+build/
+dist/
+*.spec.bak
