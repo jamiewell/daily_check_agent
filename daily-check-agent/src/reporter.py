@@ -51,12 +51,45 @@ def print_summary(summary: dict, timestamp: str) -> None:
     console.print(table)
 
 
+def print_comparison(comparison: dict) -> None:
+    """전일 대비 비교 테이블 출력."""
+    from src.comparator import METRIC_LABELS, TREND_ICON
+
+    table = Table(box=box.SIMPLE_HEAD, show_header=True,
+                  header_style="bold blue", expand=False,
+                  title="[bold blue]전일 대비 비교[/bold blue]")
+    table.add_column("지표",    style="dim",  min_width=14)
+    table.add_column("서버",    style="cyan", min_width=12)
+    table.add_column("전일",    justify="right", min_width=12)
+    table.add_column("당일",    justify="right", min_width=12)
+    table.add_column("변화(%)", justify="right", min_width=9)
+    table.add_column("추세",    justify="center", min_width=6)
+
+    TREND_COLOR = {"증가": "red", "감소": "green", "유지": "white"}
+
+    for inst, metrics in comparison.items():
+        for key, d in metrics.items():
+            icon  = TREND_ICON[d["trend"]]
+            color = TREND_COLOR[d["trend"]]
+            sign  = "+" if d["delta_pct"] >= 0 else ""
+            table.add_row(
+                METRIC_LABELS[key],
+                inst,
+                f"{d['yesterday']}{d['unit']}",
+                f"{d['today']}{d['unit']}",
+                f"[{color}]{sign}{d['delta_pct']}%[/{color}]",
+                f"[{color}]{icon} {d['trend']}[/{color}]",
+            )
+
+    console.print(table)
+
+
 def print_llm_analysis(analysis: str) -> None:
     console.print(Panel(analysis, title="[bold green]AI 분석 결과[/bold green]", border_style="green"))
 
 
 def save_report(summary: dict, analysis: str, timestamp: str, output_dir: str,
-                template_path: str = None) -> str:
+                template_path: str = None, comparison: dict = None) -> str:
     os.makedirs(output_dir, exist_ok=True)
     filename = f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
     filepath = os.path.join(output_dir, filename)
@@ -80,6 +113,23 @@ def save_report(summary: dict, analysis: str, timestamp: str, output_dir: str,
     if not alert_lines:
         alert_lines.append("- 이상 없음")
 
+    # 전일 비교 테이블 (Markdown)
+    comparison_rows = []
+    if comparison:
+        from src.comparator import METRIC_LABELS, TREND_ICON
+        comparison_rows.append(
+            "| 서버 | 지표 | 전일 | 당일 | 변화(%) | 추세 |"
+        )
+        comparison_rows.append("|---|---|---|---|---|---|")
+        for inst, metrics in comparison.items():
+            for key, d in metrics.items():
+                sign = "+" if d["delta_pct"] >= 0 else ""
+                comparison_rows.append(
+                    f"| {inst} | {METRIC_LABELS[key]} | {d['yesterday']}{d['unit']} "
+                    f"| {d['today']}{d['unit']} | {sign}{d['delta_pct']}% "
+                    f"| {TREND_ICON[d['trend']]} {d['trend']} |"
+                )
+
     # 템플릿 로드 및 치환
     if template_path and os.path.exists(template_path):
         tpl = _load_template(template_path)
@@ -92,6 +142,7 @@ def save_report(summary: dict, analysis: str, timestamp: str, output_dir: str,
             "| 서버 | 상태 | CPU avg | CPU max | MEM | Rx max | Tx max |\n"
             "|------|------|---------|---------|-----|--------|--------|\n"
             "{metrics_table}\n\n"
+            "## 전일 대비 비교\n\n{comparison_table}\n\n"
             "## 알림 목록\n\n{alerts_list}\n\n---\n\n"
             "## AI 분석 결과\n\n{ai_analysis}\n"
         )
@@ -99,6 +150,7 @@ def save_report(summary: dict, analysis: str, timestamp: str, output_dir: str,
     content = tpl.format(
         timestamp=timestamp,
         metrics_table="\n".join(metrics_rows),
+        comparison_table="\n".join(comparison_rows) if comparison_rows else "전일 데이터 없음",
         alerts_list="\n".join(alert_lines),
         ai_analysis=analysis,
     )

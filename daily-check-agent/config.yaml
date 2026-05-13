@@ -29,10 +29,8 @@ ollama:
   num_predict: 1024
 
 data:
-  sample_dir: "sample_data"
-  cpu_file: "cpu.json"
-  memory_file: "memory.json"
-  network_file: "network.json"
+  sample_dir: "sample_data/today"
+  sample_dir_yesterday: "sample_data/yesterday"
 
 thresholds:
   cpu_warning: 80.0

@@ -43,8 +43,8 @@ class OllamaClient:
         self._prompt_analyze_tpl = _load_template(os.path.join(templates_dir, prompt_analyze_file))
         self._prompt_system_tpl  = _load_template(os.path.join(templates_dir, prompt_system_file))
 
-    def analyze(self, summary: dict) -> LLMResponse:
-        prompt = self._build_prompt(summary)
+    def analyze(self, summary: dict, comparison: dict = None) -> LLMResponse:
+        prompt = self._build_prompt(summary, comparison)
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -107,9 +107,14 @@ class OllamaClient:
             dbg.log_error("Ollama 알 수 없는 오류", e)
             return LLMResponse(f"[LLM 오류] {e}")
 
-    def _build_prompt(self, summary: dict) -> str:
+    def _build_prompt(self, summary: dict, comparison: dict = None) -> str:
+        from src.comparator import comparison_text as make_comparison_text
         servers_text = json.dumps(summary, ensure_ascii=False, indent=2)
-        return self._prompt_analyze_tpl.format(servers_text=servers_text)
+        cmp_text = make_comparison_text(comparison) if comparison else "(전일 데이터 없음)"
+        return self._prompt_analyze_tpl.format(
+            servers_text=servers_text,
+            comparison_text=cmp_text,
+        )
 
     def build_system_message(self, summary: dict) -> str:
         servers_text = json.dumps(summary, ensure_ascii=False, indent=2)

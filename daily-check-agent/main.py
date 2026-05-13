@@ -14,7 +14,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from src.data_loader import load_all
 from src.preprocessor import summarize
 from src.llm_client import OllamaClient
-from src.reporter import console, print_summary, print_llm_analysis, save_report
+from src.reporter import console, print_summary, print_comparison, print_llm_analysis, save_report
+from src.comparator import compare as do_compare, comparison_text
 from src import debug_logger as dbg
 
 
@@ -26,6 +27,19 @@ def _load_config(config_path: str) -> dict:
 def _resolve_sample_dir(cfg: dict, config_path: str) -> str:
     base = os.path.dirname(os.path.abspath(config_path))
     return os.path.join(base, cfg["data"]["sample_dir"])
+
+
+def _load_yesterday(cfg: dict, config_path: str, thresholds: dict):
+    """전일 샘플 데이터 로드 및 요약. 디렉토리 없으면 None 반환."""
+    yd_key = cfg["data"].get("sample_dir_yesterday")
+    if not yd_key:
+        return None
+    base = os.path.dirname(os.path.abspath(config_path))
+    yd_dir = os.path.join(base, yd_key)
+    if not os.path.isdir(yd_dir):
+        return None
+    raw_yd = load_all(yd_dir)
+    return summarize(raw_yd, thresholds)
 
 
 def _resolve_templates(cfg: dict, config_path: str) -> dict:
@@ -82,7 +96,7 @@ def cli(ctx, config, debug):
 @click.option("--save/--no-save", default=True, show_default=True, help="리포트 파일 저장 여부")
 @click.pass_context
 def check(ctx, save):
-    """메트릭 수집 + 요약 테이블 출력 (LLM 분석 없음)"""
+    """메트릭 수집 + 요약 테이블 + 전일 비교 출력 (LLM 분석 없음)"""
     cfg = ctx.obj["cfg"]
     sample_dir = _resolve_sample_dir(cfg, ctx.obj["config_path"])
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -92,9 +106,18 @@ def check(ctx, save):
     summary = summarize(raw, cfg["thresholds"])
     print_summary(summary, timestamp)
 
+    # 전일 비교
+    summary_yd  = _load_yesterday(cfg, ctx.obj["config_path"], cfg["thresholds"])
+    comparison  = do_compare(summary, summary_yd) if summary_yd else None
+    if comparison:
+        print_comparison(comparison)
+    else:
+        console.print("[dim]전일 데이터 없음 — 비교 생략[/dim]")
+
     if save:
         tpl = _resolve_templates(cfg, ctx.obj["config_path"])
-        path = save_report(summary, "(LLM 분석 생략)", timestamp, cfg["reports"]["output_dir"], tpl["report"])
+        path = save_report(summary, "(LLM 분석 생략)", timestamp,
+                           cfg["reports"]["output_dir"], tpl["report"], comparison)
         console.print(f"\n[dim]리포트 저장됨: {path}[/dim]")
 
 
@@ -102,7 +125,7 @@ def check(ctx, save):
 @click.option("--save/--no-save", default=True, show_default=True, help="리포트 파일 저장 여부")
 @click.pass_context
 def analyze(ctx, save):
-    """메트릭 수집 + AI 분석 (Ollama/Qwen3)"""
+    """메트릭 수집 + 전일 비교 + AI 분석 (Ollama/Qwen3)"""
     cfg = ctx.obj["cfg"]
     sample_dir = _resolve_sample_dir(cfg, ctx.obj["config_path"])
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -112,15 +135,22 @@ def analyze(ctx, save):
     summary = summarize(raw, cfg["thresholds"])
     print_summary(summary, timestamp)
 
+    # 전일 비교
+    summary_yd = _load_yesterday(cfg, ctx.obj["config_path"], cfg["thresholds"])
+    comparison = do_compare(summary, summary_yd) if summary_yd else None
+    if comparison:
+        print_comparison(comparison)
+
     tpl = _resolve_templates(cfg, ctx.obj["config_path"])
     llm = _make_llm(cfg, ctx.obj["config_path"])
     with console.status("[bold]Qwen3 분석 중...[/bold]", spinner="dots"):
-        result = llm.analyze(summary)
+        result = llm.analyze(summary, comparison=comparison)
     _print_llm_status(result)
     print_llm_analysis(str(result))
 
     if save:
-        path = save_report(summary, str(result), timestamp, cfg["reports"]["output_dir"], tpl["report"])
+        path = save_report(summary, str(result), timestamp,
+                           cfg["reports"]["output_dir"], tpl["report"], comparison)
         console.print(f"[dim]리포트 저장됨: {path}[/dim]")
 
 
