@@ -14,13 +14,13 @@ Grafana API 응답 JSON에서 MVP 에이전트가 필요한 키만 추출.
 필요한 키만 남기는 기준 (data_loader.py 파싱 로직 기반):
     results.{refId}.frames[].schema.fields[1].labels.instance
     results.{refId}.frames[].schema.fields[1].labels.groupname  (process 파일만)
+    results.{refId}.frames[].data.values[0]                     (타임스탬프 — 조회 시각 파악용)
     results.{refId}.frames[].data.values[1]                     (수치 배열)
 
 삭제되는 키:
     - frames[].schema.meta / refId / name
     - frames[].schema.fields[*].name/type/typeInfo/config
     - frames[].schema.fields[0] 내용 (위치 자리만 유지)
-    - frames[].data.values[0] (타임스탬프 배열)
     - results.{refId}.status / error 등
 """
 
@@ -41,8 +41,10 @@ def slim_frame(frame: dict) -> dict:
     if "instance"  in labels: slim_labels["instance"]  = labels["instance"]
     if "groupname" in labels: slim_labels["groupname"] = labels["groupname"]
 
-    # data.values[1] 만 필요 (수치 배열)
-    values_raw = frame.get("data", {}).get("values", [[], []])
+    # data.values[0] = 타임스탬프 배열 (조회 시간 파악용으로 보존)
+    # data.values[1] = 수치 배열 (에이전트가 실제 사용)
+    values_raw    = frame.get("data", {}).get("values", [[], []])
+    timestamps    = values_raw[0] if len(values_raw) > 0 else []
     metric_values = values_raw[1] if len(values_raw) > 1 else []
 
     return {
@@ -54,7 +56,7 @@ def slim_frame(frame: dict) -> dict:
         },
         "data": {
             "values": [
-                [],             # values[0]: 타임스탬프 자리 (읽지 않음)
+                timestamps,     # values[0]: 타임스탬프 보존 (언제 조회했는지 확인 가능)
                 metric_values,  # values[1]: 실제 수치
             ]
         },

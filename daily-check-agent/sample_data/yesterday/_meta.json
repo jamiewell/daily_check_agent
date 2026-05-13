@@ -1,0 +1,9 @@
+{
+  "date": "2026-05-12",
+  "time_range": "09:00:00 ~ 09:04:45 KST",
+  "from_ms": "1778544000000",
+  "to_ms": "1778544285000",
+  "interval_sec": 15,
+  "points": 20,
+  "note": "샘플 데이터 — 실제 Grafana API 응답과 동일한 JSON 구조"
+}
