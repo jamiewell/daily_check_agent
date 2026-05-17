@@ -271,9 +271,35 @@ def chat(ctx):
         last_analysis   = ""
         last_timestamp  = ""
 
+        # 토큰 사용량 추적
+        lc_cfg_chat = cfg.get("llama_cpp", {})
+        ctx_size = lc_cfg_chat.get("context_size", 4096) if lc_cfg_chat.get("enabled", False) else 4096
+        tok_warn  = int(ctx_size * 0.9)
+        current_tokens = 0
+
         while True:
+            # 토큰 임계치 경고 및 초기화 선택
+            if current_tokens >= tok_warn:
+                pct = current_tokens / ctx_size * 100
+                console.print(
+                    f"\n[bold yellow]⚠  토큰 정리 필요[/bold yellow]  "
+                    f"[yellow]{current_tokens}/{ctx_size}tok ({pct:.0f}%)[/yellow]"
+                )
+                try:
+                    answer = input("대화 이력을 초기화하시겠습니까? (y/n) > ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    console.print("\n[dim]대화 종료.[/dim]")
+                    break
+                if answer in ("y", "yes", "예", "네"):
+                    messages = [m for m in messages if m["role"] == "system"]
+                    current_tokens = 0
+                    console.print("[green]대화 이력 초기화 완료.[/green]\n")
+                    continue
+
+            # 입력 프롬프트 (토큰 수 표시)
+            tok_label = f" [{current_tokens}/{ctx_size}tok]" if current_tokens > 0 else ""
             try:
-                user_input = input("You > ").strip()
+                user_input = input(f"You{tok_label} > ").strip()
             except (EOFError, KeyboardInterrupt):
                 console.print("\n[dim]대화 종료.[/dim]")
                 break
@@ -316,6 +342,8 @@ def chat(ctx):
                 last_analysis = str(result)
                 messages.append({"role": "assistant", "content": last_analysis})
                 print_llm_analysis(last_analysis)
+                if result.prompt_tokens > 0:
+                    current_tokens = result.prompt_tokens + result.response_tokens
                 console.print("[dim]리포트를 저장하려면 '리포트 만들어줘'라고 입력하세요.[/dim]\n")
                 continue
 
@@ -326,6 +354,8 @@ def chat(ctx):
             _print_llm_status(result)
             messages.append({"role": "assistant", "content": str(result)})
             print_llm_analysis(str(result))
+            if result.prompt_tokens > 0:
+                current_tokens = result.prompt_tokens + result.response_tokens
 
     finally:
         llama_server.stop(server_proc)
