@@ -211,11 +211,16 @@ def _is_check_request(text: str) -> bool:
     return any(kw in text for kw in CHECK_KEYWORDS)
 
 
-def _build_check_context(llm: OllamaClient, summary: dict) -> str:
+def _build_check_context(summary: dict, comparison=None) -> str:
+    import json
+    from src.comparator import comparison_text as make_comparison_text
+    servers_text = json.dumps(summary, ensure_ascii=False, indent=2)
+    cmp = make_comparison_text(comparison) if comparison else "(전일 데이터 없음)"
     return (
-        f"다음은 방금 수집한 서버 점검 데이터야. 이 데이터를 바탕으로 이후 질문에 답해줘.\n\n"
-        f"{llm.build_system_message(summary)}\n\n"
-        f"점검 결과를 간략히 요약하고 주의사항을 알려줘."
+        f"아래 서버 점검 데이터를 분석해줘.\n\n"
+        f"[서버 메트릭]\n{servers_text}\n\n"
+        f"[전일 대비]\n{cmp}\n\n"
+        f"점검 결과를 요약하고 주의사항을 알려줘."
     )
 
 
@@ -276,14 +281,21 @@ def chat(ctx):
                 summary = summarize(raw, cfg["thresholds"])
                 print_summary(summary, timestamp)
 
-                messages.append({"role": "user", "content": _build_check_context(llm, summary)})
+                summary_yd = _load_yesterday(cfg, ctx.obj["config_path"], cfg["thresholds"])
+                comparison = do_compare(summary, summary_yd) if summary_yd else None
+                if comparison:
+                    print_comparison(comparison)
+                else:
+                    console.print("[dim]전일 데이터 없음 — 비교 생략[/dim]")
+
+                messages.append({"role": "user", "content": _build_check_context(summary, comparison)})
                 with console.status("[bold]AI 점검 분석 중...[/bold]", spinner="dots"):
                     result = llm.chat(messages)
                 _print_llm_status(result)
                 messages.append({"role": "assistant", "content": str(result)})
                 print_llm_analysis(str(result))
 
-                path = save_report(summary, str(result), timestamp, cfg["reports"]["output_dir"], tpl["report"])
+                path = save_report(summary, str(result), timestamp, cfg["reports"]["output_dir"], tpl["report"], comparison)
                 console.print(f"[dim]리포트 저장됨: {path}[/dim]\n")
                 continue
 

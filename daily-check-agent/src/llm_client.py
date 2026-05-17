@@ -201,6 +201,14 @@ class LlamaCppClient:
         except requests.exceptions.Timeout as e:
             dbg.log_error("LlamaCpp Timeout", e)
             return LLMResponse("[LLM 오류] llama-server 응답 시간 초과 (180초).")
+        except requests.exceptions.HTTPError as e:
+            body = ""
+            try:
+                body = e.response.text[:500]
+            except Exception:
+                pass
+            dbg.log_error("LlamaCpp HTTP 오류", f"{e} | body: {body}")
+            return LLMResponse(f"[LLM 오류] HTTP {e.response.status_code}: {body}")
         except Exception as e:
             dbg.log_error("LlamaCpp 알 수 없는 오류", e)
             return LLMResponse(f"[LLM 오류] {e}")
