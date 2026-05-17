@@ -257,13 +257,19 @@ def predict(ctx, metric, horizon, llm):
             llama_server.stop(server_proc)
 
 
-CHECK_KEYWORDS   = ("일일점검", "점검", "서버 점검", "check", "분석 시작", "점검 시작")
-REPORT_KEYWORDS  = ("리포트 만들어", "리포트 생성", "report 만들어", "report 생성", "리포트 저장")
-PREDICT_KEYWORDS = ("예측", "사용률 예측", "트렌드", "증가 추세", "앞으로 어떻게")
+CHECK_KEYWORDS        = ("일일점검", "점검", "분석해줘", "서버 점검", "check", "분석 시작", "점검 시작")
+QUICK_CHECK_KEYWORDS  = ("현황 확인", "현황 보여", "빠른 점검", "메트릭만", "표만", "지표 확인")
+REPORT_KEYWORDS       = ("리포트 만들어", "리포트 생성", "report 만들어", "report 생성", "리포트 저장")
+PREDICT_KEYWORDS      = ("예측", "사용률 예측", "트렌드", "증가 추세", "앞으로 어떻게")
+HELP_KEYWORDS         = ("도움말", "help", "명령어", "사용법", "?")
 
 
 def _is_check_request(text: str) -> bool:
     return any(kw in text for kw in CHECK_KEYWORDS)
+
+
+def _is_quick_check_request(text: str) -> bool:
+    return any(kw in text for kw in QUICK_CHECK_KEYWORDS)
 
 
 def _is_report_request(text: str) -> bool:
@@ -272,6 +278,30 @@ def _is_report_request(text: str) -> bool:
 
 def _is_predict_request(text: str) -> bool:
     return any(kw in text for kw in PREDICT_KEYWORDS)
+
+
+def _is_help_request(text: str) -> bool:
+    return text.strip() in HELP_KEYWORDS or any(kw in text for kw in HELP_KEYWORDS)
+
+
+def _print_chat_help() -> None:
+    from rich.table import Table
+    from rich import box as rbox
+    tbl = Table(box=rbox.SIMPLE_HEAD, title="[bold cyan]사용 가능한 명령어[/bold cyan]",
+                header_style="bold", expand=False)
+    tbl.add_column("입력 예시", style="cyan", min_width=32)
+    tbl.add_column("기능", min_width=38)
+    rows = [
+        ("현황 확인  /  현황 보여  /  빠른 점검",  "메트릭 테이블 + 전일 비교  (AI 없음, 빠름)"),
+        ("일일점검  /  점검  /  분석해줘",          "메트릭 + 전일 비교 + AI 종합 분석"),
+        ("예측해줘  /  사용률 예측  /  트렌드",     "시계열 예측 1h/3h/6h + AI 해석"),
+        ("리포트 만들어줘  /  리포트 생성",         "마지막 점검 결과를 Markdown 파일로 저장"),
+        ("도움말  /  help  /  ?",                  "이 도움말 표시"),
+        ("exit  /  quit  /  종료",                 "에이전트 종료"),
+    ]
+    for kw, desc in rows:
+        tbl.add_row(kw, desc)
+    console.print(tbl)
 
 
 def _resolve_forecast_dir(cfg: dict, config_path: str) -> str:
@@ -335,7 +365,7 @@ def chat(ctx):
 
         console.print("[bold cyan]일일점검 AI 에이전트[/bold cyan] 시작")
         console.print(f"[dim]{model_info}[/dim]")
-        console.print("[dim]'일일점검' 또는 '점검' 입력 시 서버 점검 | '리포트 만들어줘' 입력 시 파일 저장 | 종료: exit[/dim]\n")
+        console.print("[dim]'도움말' 또는 '?' 입력 시 전체 명령어 목록을 확인할 수 있습니다.[/dim]\n")
 
         # 마지막 점검 결과 — 리포트 요청 시 재사용
         last_summary    = None
@@ -381,6 +411,27 @@ def chat(ctx):
             if user_input.lower() in ("exit", "quit", "종료", "q"):
                 console.print("[dim]대화 종료.[/dim]")
                 break
+
+            # 도움말 키워드
+            if _is_help_request(user_input):
+                _print_chat_help()
+                continue
+
+            # 빠른 현황 키워드 (LLM 없이 테이블 + 전일 비교만)
+            if _is_quick_check_request(user_input):
+                last_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                console.print("\n[bold]데이터 로딩 중...[/bold]")
+                raw = load_all(sample_dir)
+                last_summary = summarize(raw, cfg["thresholds"])
+                print_summary(last_summary, last_timestamp)
+                summary_yd = _load_yesterday(cfg, ctx.obj["config_path"], cfg["thresholds"])
+                last_comparison = do_compare(last_summary, summary_yd) if summary_yd else None
+                if last_comparison:
+                    print_comparison(last_comparison)
+                else:
+                    console.print("[dim]전일 데이터 없음 — 비교 생략[/dim]")
+                console.print("[dim]AI 분석이 필요하면 '점검해줘'를 입력하세요.[/dim]\n")
+                continue
 
             # 예측 키워드 감지
             if _is_predict_request(user_input):
