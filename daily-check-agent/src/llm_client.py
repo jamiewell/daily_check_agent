@@ -169,9 +169,27 @@ class LlamaCppClient:
         return self.chat(messages)
 
     def chat(self, messages: list) -> LLMResponse:
-        """Multi-turn chat — OpenAI 호환 /v1/chat/completions."""
+        """Multi-turn chat — 컨텍스트 초과 시 오래된 메시지 자동 제거 후 재시도."""
+        working = list(messages)
+        while True:
+            result, overflowed = self._try_chat(working)
+            if not overflowed:
+                return result
+            sys_msgs  = [m for m in working if m["role"] == "system"]
+            chat_msgs = [m for m in working if m["role"] != "system"]
+            if len(chat_msgs) <= 1:
+                dbg.log_step("컨텍스트 초과: 더 이상 줄일 수 없음")
+                return LLMResponse("[LLM 오류] 컨텍스트가 너무 깁니다. 새 대화를 시작해 주세요.")
+            # 가장 오래된 교환 쌍(user+assistant) 제거
+            remove = min(2, len(chat_msgs) - 1)
+            chat_msgs = chat_msgs[remove:]
+            working = sys_msgs + chat_msgs
+            dbg.log_step(f"컨텍스트 초과: 메시지 {len(messages)}→{len(working)}개로 축소 후 재시도")
+
+    def _try_chat(self, messages: list):
+        """단일 API 호출. (LLMResponse, is_overflow) 반환."""
         payload = {
-            "model":       "local",   # llama-server 는 모델명 무시
+            "model":       "local",
             "messages":    self._no_think(messages),
             "stream":      False,
             "temperature": self.temperature,
@@ -187,31 +205,37 @@ class LlamaCppClient:
             dbg.log_response("LlamaCpp /v1/chat/completions", resp.status_code, data, elapsed)
             usage = data.get("usage", {})
             msg_data = data["choices"][0]["message"]
-            # Qwen3 thinking 모드 폴백: content 가 비어 있으면 reasoning_content 사용
             content = (msg_data.get("content") or msg_data.get("reasoning_content") or "").strip()
             return LLMResponse(
                 content=content,
                 prompt_tokens=usage.get("prompt_tokens", 0),
                 response_tokens=usage.get("completion_tokens", 0),
                 elapsed=elapsed,
-            )
+            ), False
         except requests.exceptions.ConnectionError as e:
             dbg.log_error("LlamaCpp ConnectionError", e)
-            return LLMResponse("[LLM 오류] llama-server에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.")
+            return LLMResponse("[LLM 오류] llama-server에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요."), False
         except requests.exceptions.Timeout as e:
             dbg.log_error("LlamaCpp Timeout", e)
-            return LLMResponse("[LLM 오류] llama-server 응답 시간 초과 (180초).")
+            return LLMResponse("[LLM 오류] llama-server 응답 시간 초과 (180초)."), False
         except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 400:
+                try:
+                    err_type = e.response.json().get("error", {}).get("type", "")
+                    if err_type == "exceed_context_size_error":
+                        return LLMResponse(""), True  # 재시도 신호
+                except Exception:
+                    pass
             body = ""
             try:
                 body = e.response.text[:500]
             except Exception:
                 pass
             dbg.log_error("LlamaCpp HTTP 오류", f"{e} | body: {body}")
-            return LLMResponse(f"[LLM 오류] HTTP {e.response.status_code}: {body}")
+            return LLMResponse(f"[LLM 오류] HTTP {e.response.status_code}: {body}"), False
         except Exception as e:
             dbg.log_error("LlamaCpp 알 수 없는 오류", e)
-            return LLMResponse(f"[LLM 오류] {e}")
+            return LLMResponse(f"[LLM 오류] {e}"), False
 
     def _build_prompt(self, summary: dict, comparison: dict = None) -> str:
         from src.comparator import comparison_text as make_comparison_text
