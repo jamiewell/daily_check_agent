@@ -139,7 +139,7 @@ def cli(ctx, config, debug):
 
 
 @cli.command()
-@click.option("--save/--no-save", default=True, show_default=True, help="리포트 파일 저장 여부")
+@click.option("--save/--no-save", default=False, show_default=True, help="리포트 파일 저장 여부")
 @click.pass_context
 def check(ctx, save):
     """메트릭 수집 + 요약 테이블 + 전일 비교 출력 (LLM 분석 없음)"""
@@ -168,7 +168,7 @@ def check(ctx, save):
 
 
 @cli.command()
-@click.option("--save/--no-save", default=True, show_default=True, help="리포트 파일 저장 여부")
+@click.option("--save/--no-save", default=False, show_default=True, help="리포트 파일 저장 여부")
 @click.pass_context
 def analyze(ctx, save):
     """메트릭 수집 + 전일 비교 + AI 분석 (Ollama 또는 llama.cpp)"""
@@ -204,11 +204,16 @@ def analyze(ctx, save):
         llama_server.stop(server_proc)
 
 
-CHECK_KEYWORDS = ("일일점검", "점검", "서버 점검", "check", "분석 시작", "점검 시작")
+CHECK_KEYWORDS  = ("일일점검", "점검", "서버 점검", "check", "분석 시작", "점검 시작")
+REPORT_KEYWORDS = ("리포트 만들어", "리포트 생성", "report 만들어", "report 생성", "리포트 저장")
 
 
 def _is_check_request(text: str) -> bool:
     return any(kw in text for kw in CHECK_KEYWORDS)
+
+
+def _is_report_request(text: str) -> bool:
+    return any(kw in text for kw in REPORT_KEYWORDS)
 
 
 def _build_check_context(summary: dict, comparison=None) -> str:
@@ -258,7 +263,13 @@ def chat(ctx):
 
         console.print("[bold cyan]일일점검 AI 에이전트[/bold cyan] 시작")
         console.print(f"[dim]{model_info}[/dim]")
-        console.print("[dim]'일일점검' 또는 '점검' 입력 시 서버 점검을 실행합니다. 종료: exit[/dim]\n")
+        console.print("[dim]'일일점검' 또는 '점검' 입력 시 서버 점검 | '리포트 만들어줘' 입력 시 파일 저장 | 종료: exit[/dim]\n")
+
+        # 마지막 점검 결과 — 리포트 요청 시 재사용
+        last_summary    = None
+        last_comparison = None
+        last_analysis   = ""
+        last_timestamp  = ""
 
         while True:
             try:
@@ -273,30 +284,39 @@ def chat(ctx):
                 console.print("[dim]대화 종료.[/dim]")
                 break
 
+            # 리포트 저장 키워드 감지
+            if _is_report_request(user_input):
+                if last_summary is None:
+                    console.print("[yellow]먼저 점검을 실행해 주세요. ('일일점검' 또는 '점검' 입력)[/yellow]")
+                    continue
+                path = save_report(last_summary, last_analysis, last_timestamp,
+                                   cfg["reports"]["output_dir"], tpl["report"], last_comparison)
+                console.print(f"[green]리포트 저장됨:[/green] {path}\n")
+                continue
+
             # 점검 키워드 감지
             if _is_check_request(user_input):
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                last_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 console.print("\n[bold]데이터 로딩 중...[/bold]")
                 raw = load_all(sample_dir)
-                summary = summarize(raw, cfg["thresholds"])
-                print_summary(summary, timestamp)
+                last_summary = summarize(raw, cfg["thresholds"])
+                print_summary(last_summary, last_timestamp)
 
                 summary_yd = _load_yesterday(cfg, ctx.obj["config_path"], cfg["thresholds"])
-                comparison = do_compare(summary, summary_yd) if summary_yd else None
-                if comparison:
-                    print_comparison(comparison)
+                last_comparison = do_compare(last_summary, summary_yd) if summary_yd else None
+                if last_comparison:
+                    print_comparison(last_comparison)
                 else:
                     console.print("[dim]전일 데이터 없음 — 비교 생략[/dim]")
 
-                messages.append({"role": "user", "content": _build_check_context(summary, comparison)})
+                messages.append({"role": "user", "content": _build_check_context(last_summary, last_comparison)})
                 with console.status("[bold]AI 점검 분석 중...[/bold]", spinner="dots"):
                     result = llm.chat(messages)
                 _print_llm_status(result)
-                messages.append({"role": "assistant", "content": str(result)})
-                print_llm_analysis(str(result))
-
-                path = save_report(summary, str(result), timestamp, cfg["reports"]["output_dir"], tpl["report"], comparison)
-                console.print(f"[dim]리포트 저장됨: {path}[/dim]\n")
+                last_analysis = str(result)
+                messages.append({"role": "assistant", "content": last_analysis})
+                print_llm_analysis(last_analysis)
+                console.print("[dim]리포트를 저장하려면 '리포트 만들어줘'라고 입력하세요.[/dim]\n")
                 continue
 
             # 일반 대화
