@@ -47,6 +47,7 @@ llama_cpp:
 data:
   sample_dir: "sample_data/today"
   sample_dir_yesterday: "sample_data/yesterday"
+  forecast_dir: "sample_data/forecast"
 
 thresholds:
   cpu_warning: 80.0

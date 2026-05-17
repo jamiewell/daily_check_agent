@@ -204,6 +204,25 @@ def load_process_memory(sample_dir: str) -> dict:
     return result
 
 
+def load_forecast_data(forecast_dir: str) -> dict:
+    """전일 24h 시간별 예측 샘플 데이터 로드.
+
+    반환: {server: {"cpu_pct": [...24개...], "mem_pct": [...], ...}}
+    """
+    result: dict = {}
+    if not os.path.isdir(forecast_dir):
+        return result
+    for fname in sorted(os.listdir(forecast_dir)):
+        if not fname.endswith("_24h.json"):
+            continue
+        server = fname.replace("_24h.json", "")
+        path   = os.path.join(forecast_dir, fname)
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        result[server] = data.get("metrics", {})
+    return result
+
+
 def load_all(sample_dir: str) -> dict:
     """모든 메트릭을 한 번에 로드. 샘플 파일이 없는 항목은 빈 dict로 건너뜁니다."""
     result = {}

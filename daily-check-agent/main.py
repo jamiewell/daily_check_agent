@@ -13,11 +13,12 @@ import yaml
 if not getattr(sys, 'frozen', False):
     sys.path.insert(0, os.path.dirname(__file__))
 
-from src.data_loader import load_all
+from src.data_loader import load_all, load_forecast_data
 from src.preprocessor import summarize
 from src.llm_client import OllamaClient, LlamaCppClient
-from src.reporter import console, print_summary, print_comparison, print_llm_analysis, save_report
+from src.reporter import console, print_summary, print_comparison, print_llm_analysis, save_report, print_forecast
 from src.comparator import compare as do_compare, comparison_text
+from src.forecaster import forecast_all, forecast_to_text
 from src import debug_logger as dbg
 from src import llama_server
 
@@ -204,8 +205,61 @@ def analyze(ctx, save):
         llama_server.stop(server_proc)
 
 
-CHECK_KEYWORDS  = ("일일점검", "점검", "서버 점검", "check", "분석 시작", "점검 시작")
-REPORT_KEYWORDS = ("리포트 만들어", "리포트 생성", "report 만들어", "report 생성", "리포트 저장")
+@cli.command()
+@click.option("--metric", default="all",
+              type=click.Choice(["all", "cpu", "memory", "network", "disk"]),
+              show_default=True, help="예측 대상 메트릭")
+@click.option("--horizon", default="1,3,6", show_default=True,
+              help="예측 구간 (시간, 콤마 구분)")
+@click.option("--llm/--no-llm", default=True, show_default=True,
+              help="LLM 자연어 해석 포함 여부")
+@click.pass_context
+def predict(ctx, metric, horizon, llm):
+    """사용률 예측 — 전일 24h 시계열 분석 (slope A/B/C 방식)"""
+    cfg = ctx.obj["cfg"]
+    horizon_hours = [int(h.strip()) for h in horizon.split(",")]
+    predict_hour  = datetime.now().hour
+
+    forecast_dir = _resolve_forecast_dir(cfg, ctx.obj["config_path"])
+    console.print("[bold]24h 예측 데이터 로딩 중...[/bold]")
+    fc_data = load_forecast_data(forecast_dir)
+    if not fc_data:
+        console.print(f"[red]예측 데이터 없음: {forecast_dir}[/red]")
+        return
+
+    sample_dir = _resolve_sample_dir(cfg, ctx.obj["config_path"])
+    raw_today  = load_all(sample_dir)
+
+    results = forecast_all(
+        forecast_data=fc_data,
+        raw_today=raw_today,
+        predict_hour=predict_hour,
+        horizon_hours=horizon_hours,
+        thresholds=cfg["thresholds"],
+        metric_filter=metric,
+    )
+    print_forecast(results, horizon_hours, predict_hour)
+
+    if llm:
+        server_proc = _start_llama_server_if_needed(cfg)
+        try:
+            llm_client = _make_llm(cfg, ctx.obj["config_path"])
+            fc_text = forecast_to_text(results, horizon_hours)
+            messages = [
+                {"role": "system", "content": "당신은 금융 IT 인프라 운영 전문가입니다. 한국어로 답변하세요."},
+                {"role": "user",   "content": _build_predict_context(fc_text)},
+            ]
+            with console.status("[bold]AI 예측 해석 중...[/bold]", spinner="dots"):
+                llm_result = llm_client.chat(messages)
+            _print_llm_status(llm_result)
+            print_llm_analysis(str(llm_result))
+        finally:
+            llama_server.stop(server_proc)
+
+
+CHECK_KEYWORDS   = ("일일점검", "점검", "서버 점검", "check", "분석 시작", "점검 시작")
+REPORT_KEYWORDS  = ("리포트 만들어", "리포트 생성", "report 만들어", "report 생성", "리포트 저장")
+PREDICT_KEYWORDS = ("예측", "사용률 예측", "트렌드", "증가 추세", "앞으로 어떻게")
 
 
 def _is_check_request(text: str) -> bool:
@@ -214,6 +268,24 @@ def _is_check_request(text: str) -> bool:
 
 def _is_report_request(text: str) -> bool:
     return any(kw in text for kw in REPORT_KEYWORDS)
+
+
+def _is_predict_request(text: str) -> bool:
+    return any(kw in text for kw in PREDICT_KEYWORDS)
+
+
+def _resolve_forecast_dir(cfg: dict, config_path: str) -> str:
+    base = os.path.dirname(os.path.abspath(config_path))
+    return os.path.join(base, cfg.get("data", {}).get("forecast_dir", "sample_data/forecast"))
+
+
+def _build_predict_context(forecast_text: str) -> str:
+    return (
+        f"아래는 서버 사용률 시계열 예측 결과야.\n\n"
+        f"{forecast_text}\n\n"
+        f"예측 결과를 해석하고 주의가 필요한 서버/메트릭을 알려줘. "
+        f"임계치 도달 예상이 있으면 구체적인 조치를 권고해줘."
+    )
 
 
 def _build_check_context(summary: dict, comparison=None) -> str:
@@ -309,6 +381,34 @@ def chat(ctx):
             if user_input.lower() in ("exit", "quit", "종료", "q"):
                 console.print("[dim]대화 종료.[/dim]")
                 break
+
+            # 예측 키워드 감지
+            if _is_predict_request(user_input):
+                p_hour   = datetime.now().hour
+                fc_dir   = _resolve_forecast_dir(cfg, ctx.obj["config_path"])
+                fc_data  = load_forecast_data(fc_dir)
+                if not fc_data:
+                    console.print(f"[yellow]예측 데이터 없음: {fc_dir}[/yellow]")
+                else:
+                    raw_t = load_all(sample_dir)
+                    fc_results = forecast_all(
+                        forecast_data=fc_data,
+                        raw_today=raw_t,
+                        predict_hour=p_hour,
+                        horizon_hours=[1, 3, 6],
+                        thresholds=cfg["thresholds"],
+                    )
+                    print_forecast(fc_results, [1, 3, 6], p_hour)
+                    fc_text = forecast_to_text(fc_results, [1, 3, 6])
+                    messages.append({"role": "user", "content": _build_predict_context(fc_text)})
+                    with console.status("[bold]AI 예측 해석 중...[/bold]", spinner="dots"):
+                        result = llm.chat(messages)
+                    _print_llm_status(result)
+                    messages.append({"role": "assistant", "content": str(result)})
+                    print_llm_analysis(str(result))
+                    if result.prompt_tokens > 0:
+                        current_tokens = result.prompt_tokens + result.response_tokens
+                continue
 
             # 리포트 저장 키워드 감지
             if _is_report_request(user_input):

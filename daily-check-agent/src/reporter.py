@@ -88,6 +88,114 @@ def print_llm_analysis(analysis: str) -> None:
     console.print(Panel(analysis, title="[bold green]AI 분석 결과[/bold green]", border_style="green"))
 
 
+def print_forecast(results: dict, horizon_hours: list, predict_hour: int) -> None:
+    """사용률 예측 결과를 Rich 테이블로 출력."""
+    from src.forecaster import METRIC_CONFIG
+
+    RISK_COLOR = {"정상": "green", "주의": "yellow", "위험": "red"}
+
+    console.print(
+        f"\n[bold magenta]사용률 예측[/bold magenta]  "
+        f"[dim]기준 시각: {predict_hour:02d}:00 KST | "
+        f"예측 구간: {', '.join(str(h)+'h' for h in sorted(horizon_hours))}[/dim]"
+    )
+
+    for server, metrics in results.items():
+        if not metrics:
+            continue
+
+        tbl = Table(
+            box=box.ROUNDED,
+            title=f"[bold cyan]{server}[/bold cyan]",
+            show_header=True,
+            header_style="bold blue",
+            expand=False,
+        )
+        tbl.add_column("메트릭",   style="dim",  min_width=10)
+        tbl.add_column("기준선",   justify="right", min_width=9)
+        tbl.add_column("현재값",   justify="right", min_width=9)
+        tbl.add_column("추세A\n(오늘 진입)", justify="center", min_width=10)
+        tbl.add_column("추세B\n(전일 진입)", justify="center", min_width=10)
+        for h in sorted(horizon_hours):
+            tbl.add_column(f"{h}h 예측", justify="right", min_width=9)
+        tbl.add_column("임계 도달", justify="center", min_width=11)
+
+        for mkey, fc in metrics.items():
+            cfg = METRIC_CONFIG[mkey]
+            unit = fc.unit
+
+            def _slope_str(si):
+                r2_note = " [dim](불규칙)[/dim]" if si.r2 < 0.3 else ""
+                return f"{si.icon} {si.direction}{r2_note}"
+
+            row = [
+                cfg["label"],
+                f"{fc.baseline}{unit}",
+                f"{fc.current_value}{unit}",
+                _slope_str(fc.slope_a),
+                _slope_str(fc.slope_b),
+            ]
+            for h in sorted(horizon_hours):
+                pred  = fc.predicted.get(h, "-")
+                risk  = fc.risk.get(h, "정상")
+                color = RISK_COLOR[risk]
+                row.append(f"[{color}]{pred}{unit}[/{color}]")
+
+            if fc.threshold_reach_h is not None:
+                row.append(f"[yellow]~{fc.threshold_reach_h}h 후 주의[/yellow]")
+            else:
+                row.append("[dim]없음[/dim]")
+
+            tbl.add_row(*row)
+
+        console.print(tbl)
+
+    _print_forecast_summary(results, horizon_hours)
+
+
+def _print_forecast_summary(results: dict, horizon_hours: list) -> None:
+    """종합 리스크 요약 테이블."""
+    from src.forecaster import METRIC_CONFIG
+
+    RISK_ORDER = {"정상": 0, "주의": 1, "위험": 2}
+    RISK_COLOR = {"정상": "green", "주의": "yellow", "위험": "red"}
+    max_h = max(horizon_hours)
+
+    tbl = Table(
+        box=box.SIMPLE_HEAD,
+        title=f"[bold]종합 리스크 요약 ({max_h}h 기준)[/bold]",
+        header_style="bold",
+        expand=False,
+    )
+    tbl.add_column("서버", style="cyan", min_width=12)
+    for mkey, cfg in METRIC_CONFIG.items():
+        tbl.add_column(cfg["label"], justify="center", min_width=9)
+    tbl.add_column("종합", justify="center", min_width=8)
+
+    for server, metrics in results.items():
+        row = [server]
+        risks = []
+        for mkey in METRIC_CONFIG:
+            fc = metrics.get(mkey)
+            if fc is None:
+                row.append("[dim]-[/dim]")
+                continue
+            r     = fc.risk.get(max_h, "정상")
+            color = RISK_COLOR[r]
+            row.append(f"[{color}]{r}[/{color}]")
+            risks.append(r)
+
+        if risks:
+            worst = max(risks, key=lambda r: RISK_ORDER.get(r, 0))
+            row.append(f"[bold {RISK_COLOR[worst]}]{worst}[/bold {RISK_COLOR[worst]}]")
+        else:
+            row.append("[dim]-[/dim]")
+
+        tbl.add_row(*row)
+
+    console.print(tbl)
+
+
 def save_report(summary: dict, analysis: str, timestamp: str, output_dir: str,
                 template_path: str = None, comparison: dict = None) -> str:
     os.makedirs(output_dir, exist_ok=True)
