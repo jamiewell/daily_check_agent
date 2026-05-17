@@ -34,11 +34,15 @@ llama_cpp:
   enabled: true
   host: "127.0.0.1"
   port: 8080
-  model_file: "runtime/models/qwen3-0.6b-q4_k_m.gguf"
-  context_size: 2048          # 저사양 PC: 1024 로 낮춤
-  threads: 4                  # 저사양 PC: CPU 코어 수보다 작게
+  # 개발 환경: 절대 경로 직접 지정 (server_exe, lib_dir, model_file 을 절대 경로로)
+  # 패키징 배포: 아래 두 항목 제거하면 runtime/ 폴더 기준으로 자동 탐색
+  server_exe: "~/Downloads/llama-b9190/llama-server"
+  lib_dir: "~/Downloads/llama-b9190"
+  model_file: "~/.ollama/models/blobs/sha256-a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f"
+  context_size: 2048
+  threads: 4
   temperature: 0.3
-  max_tokens: 512             # 저사양 PC: 256 으로 낮춤
+  max_tokens: 512
 
 data:
   sample_dir: "sample_data/today"

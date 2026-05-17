@@ -115,6 +115,8 @@ def _start_llama_server_if_needed(cfg: dict):
         model_file=lc_cfg.get("model_file", "runtime/models/qwen3-0.6b-q4_k_m.gguf"),
         context_size=lc_cfg.get("context_size", 2048),
         threads=lc_cfg.get("threads", 4),
+        server_exe=lc_cfg.get("server_exe"),
+        lib_dir=lc_cfg.get("lib_dir"),
     )
     console.print("[green]llama-server 시작 완료[/green]")
     return proc
@@ -224,65 +226,77 @@ def chat(ctx):
     cfg = ctx.obj["cfg"]
     sample_dir = _resolve_sample_dir(cfg, ctx.obj["config_path"])
     tpl = _resolve_templates(cfg, ctx.obj["config_path"])
-    llm = _make_llm(cfg, ctx.obj["config_path"])
 
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "당신은 금융 IT 인프라 운영 전문가입니다. 한국어로 답변하세요. "
-                "사용자가 '일일점검' 또는 '점검'을 요청하면 서버 메트릭 데이터를 분석합니다."
-            ),
-        }
-    ]
+    server_proc = _start_llama_server_if_needed(cfg)
+    try:
+        llm = _make_llm(cfg, ctx.obj["config_path"])
 
-    console.print("[bold cyan]일일점검 AI 에이전트[/bold cyan] 시작")
-    console.print(
-        f"[dim]모델: {cfg['ollama']['model']} │ "
-        f"온도: {cfg['ollama']['temperature']} │ "
-        f"최대 토큰: {cfg['ollama']['num_predict']}[/dim]"
-    )
-    console.print("[dim]'일일점검' 또는 '점검' 입력 시 서버 점검을 실행합니다. 종료: exit[/dim]\n")
+        # 백엔드에 맞는 모델 정보 표시
+        lc_cfg = cfg.get("llama_cpp", {})
+        if lc_cfg.get("enabled", False):
+            model_info = (f"llama.cpp │ 온도: {lc_cfg.get('temperature', 0.3)} │ "
+                          f"최대 토큰: {lc_cfg.get('max_tokens', 512)}")
+        else:
+            model_info = (f"모델: {cfg['ollama']['model']} │ "
+                          f"온도: {cfg['ollama']['temperature']} │ "
+                          f"최대 토큰: {cfg['ollama']['num_predict']}")
 
-    while True:
-        try:
-            user_input = input("You > ").strip()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]대화 종료.[/dim]")
-            break
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "당신은 금융 IT 인프라 운영 전문가입니다. 한국어로 답변하세요. "
+                    "사용자가 '일일점검' 또는 '점검'을 요청하면 서버 메트릭 데이터를 분석합니다."
+                ),
+            }
+        ]
 
-        if not user_input:
-            continue
-        if user_input.lower() in ("exit", "quit", "종료", "q"):
-            console.print("[dim]대화 종료.[/dim]")
-            break
+        console.print("[bold cyan]일일점검 AI 에이전트[/bold cyan] 시작")
+        console.print(f"[dim]{model_info}[/dim]")
+        console.print("[dim]'일일점검' 또는 '점검' 입력 시 서버 점검을 실행합니다. 종료: exit[/dim]\n")
 
-        # 점검 키워드 감지
-        if _is_check_request(user_input):
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            console.print("\n[bold]데이터 로딩 중...[/bold]")
-            raw = load_all(sample_dir)
-            summary = summarize(raw, cfg["thresholds"])
-            print_summary(summary, timestamp)
+        while True:
+            try:
+                user_input = input("You > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n[dim]대화 종료.[/dim]")
+                break
 
-            messages.append({"role": "user", "content": _build_check_context(llm, summary)})
-            with console.status("[bold]Qwen3 점검 분석 중...[/bold]", spinner="dots"):
+            if not user_input:
+                continue
+            if user_input.lower() in ("exit", "quit", "종료", "q"):
+                console.print("[dim]대화 종료.[/dim]")
+                break
+
+            # 점검 키워드 감지
+            if _is_check_request(user_input):
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                console.print("\n[bold]데이터 로딩 중...[/bold]")
+                raw = load_all(sample_dir)
+                summary = summarize(raw, cfg["thresholds"])
+                print_summary(summary, timestamp)
+
+                messages.append({"role": "user", "content": _build_check_context(llm, summary)})
+                with console.status("[bold]AI 점검 분석 중...[/bold]", spinner="dots"):
+                    result = llm.chat(messages)
+                _print_llm_status(result)
+                messages.append({"role": "assistant", "content": str(result)})
+                print_llm_analysis(str(result))
+
+                path = save_report(summary, str(result), timestamp, cfg["reports"]["output_dir"], tpl["report"])
+                console.print(f"[dim]리포트 저장됨: {path}[/dim]\n")
+                continue
+
+            # 일반 대화
+            messages.append({"role": "user", "content": user_input})
+            with console.status("[bold]AI 응답 중...[/bold]", spinner="dots"):
                 result = llm.chat(messages)
             _print_llm_status(result)
             messages.append({"role": "assistant", "content": str(result)})
             print_llm_analysis(str(result))
 
-            path = save_report(summary, str(result), timestamp, cfg["reports"]["output_dir"], tpl["report"])
-            console.print(f"[dim]리포트 저장됨: {path}[/dim]\n")
-            continue
-
-        # 일반 대화
-        messages.append({"role": "user", "content": user_input})
-        with console.status("[bold]Qwen3 응답 중...[/bold]", spinner="dots"):
-            result = llm.chat(messages)
-        _print_llm_status(result)
-        messages.append({"role": "assistant", "content": str(result)})
-        print_llm_analysis(str(result))
+    finally:
+        llama_server.stop(server_proc)
 
 
 @cli.command(name="debug")

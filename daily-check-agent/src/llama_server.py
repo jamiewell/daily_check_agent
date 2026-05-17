@@ -25,10 +25,25 @@ def _server_exe() -> Path:
 
 
 def start(port: int = 8080, model_file: str = "runtime/models/qwen3-0.6b-q4_k_m.gguf",
-          context_size: int = 2048, threads: int = 4) -> subprocess.Popen:
-    """llama-server 를 기동하고 프로세스 객체를 반환한다. 60초 안에 서버가 뜨지 않으면 예외."""
-    server_path = _server_exe()
-    model_path  = resource_path(model_file)
+          context_size: int = 2048, threads: int = 4,
+          server_exe: str = None, lib_dir: str = None) -> subprocess.Popen:
+    """llama-server 를 기동하고 프로세스 객체를 반환한다. 60초 안에 서버가 뜨지 않으면 예외.
+
+    server_exe: 절대 경로 지정 시 해당 바이너리 사용 (개발 환경용)
+    lib_dir:    dylib 검색 경로 (macOS, 절대 경로 지정 시 DYLD_LIBRARY_PATH 설정)
+    """
+    # 바이너리 경로: 절대 경로 우선, 없으면 resource_path 기반
+    if server_exe:
+        server_path = Path(server_exe).expanduser().resolve()
+    else:
+        server_path = _server_exe()
+
+    # 모델 경로: 절대 경로 우선, 없으면 resource_path 기반
+    model_path_obj = Path(model_file).expanduser()
+    if model_path_obj.is_absolute() or str(model_file).startswith("~"):
+        model_path = model_path_obj.expanduser().resolve()
+    else:
+        model_path = resource_path(model_file)
 
     if not server_path.exists():
         raise FileNotFoundError(f"llama-server 바이너리 없음: {server_path}")
@@ -42,30 +57,39 @@ def start(port: int = 8080, model_file: str = "runtime/models/qwen3-0.6b-q4_k_m.
         "--port", str(port),
         "-c",     str(context_size),
         "-t",     str(threads),
+        "-ngl",   "99",       # Metal/CUDA GPU 가속 (CPU-only 환경에서는 무시됨)
     ]
 
     # Windows 에서는 별도 콘솔 창, 그 외에는 백그라운드 실행
-    kwargs = {}
+    kwargs: dict = {}
+    env = None
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
     else:
         kwargs["stdout"] = subprocess.DEVNULL
         kwargs["stderr"] = subprocess.DEVNULL
+        # macOS: dylib 검색 경로 설정
+        if lib_dir:
+            import os
+            env = os.environ.copy()
+            env["DYLD_LIBRARY_PATH"] = str(Path(lib_dir).expanduser().resolve())
+    if env:
+        kwargs["env"] = env
 
     proc = subprocess.Popen(cmd, **kwargs)
 
     health_url = f"http://127.0.0.1:{port}/health"
-    for _ in range(60):
+    for _ in range(120):   # 최대 120초 대기 (대형 모델 로딩 고려)
         try:
-            r = requests.get(health_url, timeout=1)
-            if r.status_code in (200, 503):  # 503 = 모델 로딩 중 (정상)
+            r = requests.get(health_url, timeout=2)
+            if r.status_code == 200:   # 200 = 완전히 준비됨 (503은 아직 로딩 중)
                 return proc
         except Exception:
             pass
         time.sleep(1)
 
     proc.terminate()
-    raise RuntimeError("llama.cpp 서버가 60초 내에 시작되지 않았습니다.")
+    raise RuntimeError("llama.cpp 서버가 120초 내에 준비되지 않았습니다.")
 
 
 def stop(proc: subprocess.Popen) -> None:
