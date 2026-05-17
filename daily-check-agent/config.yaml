@@ -31,7 +31,7 @@ ollama:
 # llama.cpp 모드 (Ollama 대신 llama-server 사용 시 enabled: true)
 # 폐쇄망·저사양 Windows PC 데모용 — runtime/ 폴더에 llama-server.exe + 모델 파일 필요
 llama_cpp:
-  enabled: false
+  enabled: true
   host: "127.0.0.1"
   port: 8080
   model_file: "runtime/models/qwen3-0.6b-q4_k_m.gguf"
