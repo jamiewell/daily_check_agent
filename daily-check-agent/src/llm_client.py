@@ -140,6 +140,25 @@ class LlamaCppClient:
         self._prompt_analyze_tpl = _load_template(os.path.join(templates_dir, prompt_analyze_file))
         self._prompt_system_tpl  = _load_template(os.path.join(templates_dir, prompt_system_file))
 
+    @staticmethod
+    def _no_think(messages: list) -> list:
+        """Qwen3 thinking 모드 비활성화: 첫 번째 user 메시지 앞에 /no_think 추가.
+
+        Qwen3 는 기본으로 thinking 모드가 켜져 있어 실제 답변이
+        content 대신 reasoning_content 에 들어간다.
+        /no_think 를 붙이면 즉시 답변 모드로 전환된다.
+        """
+        result = []
+        patched = False
+        for msg in messages:
+            if not patched and msg.get("role") == "user":
+                text = msg["content"]
+                if not text.startswith("/no_think"):
+                    msg = {**msg, "content": "/no_think " + text}
+                patched = True
+            result.append(msg)
+        return result
+
     def analyze(self, summary: dict, comparison: dict = None) -> LLMResponse:
         """단일 분석 요청 — /v1/chat/completions 사용."""
         prompt = self._build_prompt(summary, comparison)
@@ -153,7 +172,7 @@ class LlamaCppClient:
         """Multi-turn chat — OpenAI 호환 /v1/chat/completions."""
         payload = {
             "model":       "local",   # llama-server 는 모델명 무시
-            "messages":    messages,
+            "messages":    self._no_think(messages),
             "stream":      False,
             "temperature": self.temperature,
             "max_tokens":  self.max_tokens,
@@ -167,8 +186,11 @@ class LlamaCppClient:
             elapsed = time.time() - t0
             dbg.log_response("LlamaCpp /v1/chat/completions", resp.status_code, data, elapsed)
             usage = data.get("usage", {})
+            msg_data = data["choices"][0]["message"]
+            # Qwen3 thinking 모드 폴백: content 가 비어 있으면 reasoning_content 사용
+            content = (msg_data.get("content") or msg_data.get("reasoning_content") or "").strip()
             return LLMResponse(
-                content=data["choices"][0]["message"]["content"].strip(),
+                content=content,
                 prompt_tokens=usage.get("prompt_tokens", 0),
                 response_tokens=usage.get("completion_tokens", 0),
                 elapsed=elapsed,
