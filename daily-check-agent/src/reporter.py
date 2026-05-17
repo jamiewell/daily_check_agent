@@ -51,19 +51,21 @@ def print_summary(summary: dict, timestamp: str) -> None:
     console.print(table)
 
 
-def print_comparison(comparison: dict) -> None:
+def print_comparison(comparison: dict,
+                     today_label: str = "당일",
+                     yesterday_label: str = "전일") -> None:
     """전일 대비 비교 테이블 출력."""
     from src.comparator import METRIC_LABELS, TREND_ICON
 
     table = Table(box=box.SIMPLE_HEAD, show_header=True,
                   header_style="bold blue", expand=False,
                   title="[bold blue]전일 대비 비교[/bold blue]")
-    table.add_column("지표",    style="dim",  min_width=14)
-    table.add_column("서버",    style="cyan", min_width=12)
-    table.add_column("전일",    justify="right", min_width=12)
-    table.add_column("당일",    justify="right", min_width=12)
-    table.add_column("변화(%)", justify="right", min_width=9)
-    table.add_column("추세",    justify="center", min_width=6)
+    table.add_column("지표",         style="dim",  min_width=14)
+    table.add_column("서버",         style="cyan", min_width=12)
+    table.add_column(yesterday_label, justify="right", min_width=14)
+    table.add_column(today_label,     justify="right", min_width=14)
+    table.add_column("변화(%)",      justify="right", min_width=9)
+    table.add_column("추세",         justify="center", min_width=6)
 
     TREND_COLOR = {"증가": "red", "감소": "green", "유지": "white"}
 

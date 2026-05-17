@@ -3,7 +3,18 @@
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_KST = timezone(timedelta(hours=9))
+
+
+def _kst_now() -> datetime:
+    """현재 한국 표준시 (KST = UTC+9). 머신 timezone에 무관하게 항상 KST 반환."""
+    return datetime.now(_KST)
+
+
+def _kst_timestamp() -> str:
+    return _kst_now().strftime("%Y-%m-%d %H:%M:%S KST")
 
 import click
 import yaml
@@ -146,7 +157,8 @@ def check(ctx, save):
     """메트릭 수집 + 요약 테이블 + 전일 비교 출력 (LLM 분석 없음)"""
     cfg = ctx.obj["cfg"]
     sample_dir = _resolve_sample_dir(cfg, ctx.obj["config_path"])
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = _kst_timestamp()
+    today_lbl, yesterday_lbl = _date_labels()
 
     console.print("[bold]데이터 로딩 중...[/bold]")
     raw = load_all(sample_dir)
@@ -157,7 +169,7 @@ def check(ctx, save):
     summary_yd  = _load_yesterday(cfg, ctx.obj["config_path"], cfg["thresholds"])
     comparison  = do_compare(summary, summary_yd) if summary_yd else None
     if comparison:
-        print_comparison(comparison)
+        print_comparison(comparison, today_lbl, yesterday_lbl)
     else:
         console.print("[dim]전일 데이터 없음 — 비교 생략[/dim]")
 
@@ -175,7 +187,8 @@ def analyze(ctx, save):
     """메트릭 수집 + 전일 비교 + AI 분석 (Ollama 또는 llama.cpp)"""
     cfg = ctx.obj["cfg"]
     sample_dir = _resolve_sample_dir(cfg, ctx.obj["config_path"])
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = _kst_timestamp()
+    today_lbl, yesterday_lbl = _date_labels()
 
     server_proc = _start_llama_server_if_needed(cfg)
     try:
@@ -188,7 +201,7 @@ def analyze(ctx, save):
         summary_yd = _load_yesterday(cfg, ctx.obj["config_path"], cfg["thresholds"])
         comparison = do_compare(summary, summary_yd) if summary_yd else None
         if comparison:
-            print_comparison(comparison)
+            print_comparison(comparison, today_lbl, yesterday_lbl)
 
         tpl = _resolve_templates(cfg, ctx.obj["config_path"])
         llm = _make_llm(cfg, ctx.obj["config_path"])
@@ -218,7 +231,7 @@ def predict(ctx, metric, horizon, llm):
     """사용률 예측 — 전일 24h 시계열 분석 (slope A/B/C 방식)"""
     cfg = ctx.obj["cfg"]
     horizon_hours = [int(h.strip()) for h in horizon.split(",")]
-    predict_hour  = datetime.now().hour
+    predict_hour  = _kst_now().hour
 
     forecast_dir = _resolve_forecast_dir(cfg, ctx.obj["config_path"])
     console.print("[bold]24h 예측 데이터 로딩 중...[/bold]")
@@ -304,13 +317,24 @@ def _print_chat_help() -> None:
     console.print(tbl)
 
 
+def _date_labels() -> tuple:
+    """(today_label, yesterday_label) — 비교 테이블 컬럼 헤더용 KST 날짜 문자열."""
+    now = _kst_now()
+    return (
+        f"당일 ({now.strftime('%m-%d')})",
+        f"전일 ({(now - timedelta(days=1)).strftime('%m-%d')})",
+    )
+
+
 def _resolve_forecast_dir(cfg: dict, config_path: str) -> str:
     base = os.path.dirname(os.path.abspath(config_path))
     return os.path.join(base, cfg.get("data", {}).get("forecast_dir", "sample_data/forecast"))
 
 
 def _build_predict_context(forecast_text: str) -> str:
+    now = _kst_now()
     return (
+        f"현재 시각: {now.strftime('%Y-%m-%d %H:%M KST')}\n\n"
         f"아래는 서버 사용률 시계열 예측 결과야.\n\n"
         f"{forecast_text}\n\n"
         f"예측 결과를 해석하고 주의가 필요한 서버/메트릭을 알려줘. "
@@ -321,9 +345,13 @@ def _build_predict_context(forecast_text: str) -> str:
 def _build_check_context(summary: dict, comparison=None) -> str:
     import json
     from src.comparator import comparison_text as make_comparison_text
-    servers_text = json.dumps(summary, ensure_ascii=False, indent=2)
+    now = _kst_now()
+    today_str     = now.strftime("%Y-%m-%d")
+    yesterday_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    servers_text  = json.dumps(summary, ensure_ascii=False, indent=2)
     cmp = make_comparison_text(comparison) if comparison else "(전일 데이터 없음)"
     return (
+        f"현재 시각: {now.strftime('%Y-%m-%d %H:%M KST')} (당일: {today_str} / 전일: {yesterday_str})\n\n"
         f"아래 서버 점검 데이터를 분석해줘.\n\n"
         f"[서버 메트릭]\n{servers_text}\n\n"
         f"[전일 대비]\n{cmp}\n\n"
@@ -419,7 +447,8 @@ def chat(ctx):
 
             # 빠른 현황 키워드 (LLM 없이 테이블 + 전일 비교만)
             if _is_quick_check_request(user_input):
-                last_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                last_timestamp = _kst_timestamp()
+                today_lbl, yesterday_lbl = _date_labels()
                 console.print("\n[bold]데이터 로딩 중...[/bold]")
                 raw = load_all(sample_dir)
                 last_summary = summarize(raw, cfg["thresholds"])
@@ -427,7 +456,7 @@ def chat(ctx):
                 summary_yd = _load_yesterday(cfg, ctx.obj["config_path"], cfg["thresholds"])
                 last_comparison = do_compare(last_summary, summary_yd) if summary_yd else None
                 if last_comparison:
-                    print_comparison(last_comparison)
+                    print_comparison(last_comparison, today_lbl, yesterday_lbl)
                 else:
                     console.print("[dim]전일 데이터 없음 — 비교 생략[/dim]")
                 console.print("[dim]AI 분석이 필요하면 '점검해줘'를 입력하세요.[/dim]\n")
@@ -435,7 +464,7 @@ def chat(ctx):
 
             # 예측 키워드 감지
             if _is_predict_request(user_input):
-                p_hour   = datetime.now().hour
+                p_hour   = _kst_now().hour
                 fc_dir   = _resolve_forecast_dir(cfg, ctx.obj["config_path"])
                 fc_data  = load_forecast_data(fc_dir)
                 if not fc_data:
@@ -473,7 +502,8 @@ def chat(ctx):
 
             # 점검 키워드 감지
             if _is_check_request(user_input):
-                last_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                last_timestamp = _kst_timestamp()
+                today_lbl, yesterday_lbl = _date_labels()
                 console.print("\n[bold]데이터 로딩 중...[/bold]")
                 raw = load_all(sample_dir)
                 last_summary = summarize(raw, cfg["thresholds"])
@@ -482,7 +512,7 @@ def chat(ctx):
                 summary_yd = _load_yesterday(cfg, ctx.obj["config_path"], cfg["thresholds"])
                 last_comparison = do_compare(last_summary, summary_yd) if summary_yd else None
                 if last_comparison:
-                    print_comparison(last_comparison)
+                    print_comparison(last_comparison, today_lbl, yesterday_lbl)
                 else:
                     console.print("[dim]전일 데이터 없음 — 비교 생략[/dim]")
 
