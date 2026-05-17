@@ -51,6 +51,13 @@ copy /Y "%SCRIPT_DIR%sample_data\yesterday\*.json" "%DIST_DIR%\sample_data\yeste
 
 if not exist "%DIST_DIR%\reports" mkdir "%DIST_DIR%\reports"
 
+REM runtime/ (llama.cpp 모드용 — 폴더가 있을 때만 복사)
+if exist "%SCRIPT_DIR%runtime" (
+    echo   runtime\ 폴더 감지 -^> 복사 (llama.cpp 모드)
+    if exist "%DIST_DIR%\runtime" rmdir /s /q "%DIST_DIR%\runtime"
+    xcopy /e /i /q "%SCRIPT_DIR%runtime" "%DIST_DIR%\runtime"
+)
+
 REM ── 5. ZIP 패키지 생성 (PowerShell 사용) ────────────────────────────
 echo [5/5] ZIP 패키지 생성
 cd /d "%SCRIPT_DIR%dist"

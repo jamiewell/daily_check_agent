@@ -7,23 +7,34 @@ PyInstaller spec — daily-check-agent
     pyinstaller daily_check_agent.spec
 
 출력: dist/daily-check-agent/
-  ├── daily-check-agent      ← 실행 파일
+  ├── daily-check-agent      ← 실행 파일 (Windows: .exe)
   ├── _internal/             ← Python 런타임·라이브러리 (건드리지 말 것)
   ├── config.yaml            ← build.sh 이 복사 (사용자 편집)
   ├── templates/             ← build.sh 이 복사
   ├── sample_data/           ← build.sh 이 복사
+  ├── runtime/               ← build.sh 이 복사 (llama_cpp 모드 시)
+  │   ├── llama-server.exe   ←   llama.cpp 바이너리 (별도 준비)
+  │   └── models/
+  │       └── *.gguf         ←   Qwen3 모델 파일 (별도 준비)
   └── reports/               ← 실행 시 자동 생성
 
-주의: templates/, sample_data/, config.yaml 은 datas 로 번들하지 않음.
-      build.sh 이 dist 폴더로 직접 복사한다.
-      사용자는 dist/daily-check-agent/ 에서 실행해야 한다.
+주의: templates/, sample_data/, config.yaml, runtime/ 은 datas 로 번들하지 않음.
+      build.sh / build.bat 이 dist 폴더로 직접 복사한다.
+      사용자는 dist/daily-check-agent/ 폴더 안에서 실행해야 한다.
 """
+
+import os
+
+# runtime/ 폴더가 있을 때만 datas 에 포함 (llama.cpp 모드)
+_runtime_datas = []
+if os.path.isdir('runtime'):
+    _runtime_datas = [('runtime', 'runtime')]
 
 a = Analysis(
     ['main.py'],
     pathex=['.'],
     binaries=[],
-    datas=[],
+    datas=_runtime_datas,
     hiddenimports=[
         # PyYAML (C 확장 모듈 포함)
         'yaml',
@@ -56,6 +67,7 @@ a = Analysis(
         'src.data_loader',
         'src.debug_logger',
         'src.grafana_client',
+        'src.llama_server',
         'src.llm_client',
         'src.preprocessor',
         'src.process_baseline',

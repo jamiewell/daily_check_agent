@@ -51,6 +51,13 @@ mkdir -p "$DIST_DIR/sample_data/today" "$DIST_DIR/sample_data/yesterday"
 cp "$SCRIPT_DIR/sample_data/today/"*.json    "$DIST_DIR/sample_data/today/"
 cp "$SCRIPT_DIR/sample_data/yesterday/"*.json "$DIST_DIR/sample_data/yesterday/"
 
+# runtime/ (llama.cpp 모드용 — 폴더가 있을 때만 복사)
+if [[ -d "$SCRIPT_DIR/runtime" ]]; then
+    echo "  runtime/ 폴더 감지 → 복사 (llama.cpp 모드)"
+    rm -rf "$DIST_DIR/runtime"
+    cp -r "$SCRIPT_DIR/runtime" "$DIST_DIR/runtime"
+fi
+
 # reports 폴더 (비어 있어도 생성)
 mkdir -p "$DIST_DIR/reports"
 

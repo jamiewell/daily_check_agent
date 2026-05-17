@@ -15,10 +15,15 @@ if not getattr(sys, 'frozen', False):
 
 from src.data_loader import load_all
 from src.preprocessor import summarize
-from src.llm_client import OllamaClient
+from src.llm_client import OllamaClient, LlamaCppClient
 from src.reporter import console, print_summary, print_comparison, print_llm_analysis, save_report
 from src.comparator import compare as do_compare, comparison_text
 from src import debug_logger as dbg
+from src import llama_server
+
+# exe 더블클릭(인자 없음) 시 analyze 모드 자동 실행
+if getattr(sys, 'frozen', False) and len(sys.argv) == 1:
+    sys.argv.append('analyze')
 
 
 def _load_config(config_path: str) -> dict:
@@ -65,17 +70,54 @@ def _print_llm_status(result, prefix: str = "") -> None:
     )
 
 
-def _make_llm(cfg: dict, config_path: str) -> OllamaClient:
+def _make_llm(cfg: dict, config_path: str):
+    """config.yaml 의 llama_cpp.enabled 여부에 따라 클라이언트 선택."""
     tpl = _resolve_templates(cfg, config_path)
+    common = dict(
+        templates_dir=tpl["dir"],
+        prompt_analyze_file=tpl["prompt_analyze"],
+        prompt_system_file=tpl["prompt_system"],
+    )
+    lc_cfg = cfg.get("llama_cpp", {})
+    if lc_cfg.get("enabled", False):
+        return LlamaCppClient(
+            host=lc_cfg.get("host", "127.0.0.1"),
+            port=lc_cfg.get("port", 8080),
+            temperature=lc_cfg.get("temperature", 0.3),
+            max_tokens=lc_cfg.get("max_tokens", 512),
+            **common,
+        )
     return OllamaClient(
         url=cfg["ollama"]["url"],
         model=cfg["ollama"]["model"],
         temperature=cfg["ollama"]["temperature"],
         num_predict=cfg["ollama"]["num_predict"],
-        templates_dir=tpl["dir"],
-        prompt_analyze_file=tpl["prompt_analyze"],
-        prompt_system_file=tpl["prompt_system"],
+        **common,
     )
+
+
+def _start_llama_server_if_needed(cfg: dict):
+    """llama_cpp.enabled 이고 서버가 꺼져 있으면 기동. 프로세스 객체 반환(없으면 None)."""
+    lc_cfg = cfg.get("llama_cpp", {})
+    if not lc_cfg.get("enabled", False):
+        return None
+    port = lc_cfg.get("port", 8080)
+    import requests as _req
+    try:
+        _req.get(f"http://127.0.0.1:{port}/health", timeout=1)
+        console.print(f"[dim]llama-server 이미 실행 중 (port {port})[/dim]")
+        return None
+    except Exception:
+        pass
+    console.print(f"[bold]llama-server 시작 중 (port {port})...[/bold]")
+    proc = llama_server.start(
+        port=port,
+        model_file=lc_cfg.get("model_file", "runtime/models/qwen3-0.6b-q4_k_m.gguf"),
+        context_size=lc_cfg.get("context_size", 2048),
+        threads=lc_cfg.get("threads", 4),
+    )
+    console.print("[green]llama-server 시작 완료[/green]")
+    return proc
 
 
 @click.group()
@@ -127,33 +169,37 @@ def check(ctx, save):
 @click.option("--save/--no-save", default=True, show_default=True, help="리포트 파일 저장 여부")
 @click.pass_context
 def analyze(ctx, save):
-    """메트릭 수집 + 전일 비교 + AI 분석 (Ollama/Qwen3)"""
+    """메트릭 수집 + 전일 비교 + AI 분석 (Ollama 또는 llama.cpp)"""
     cfg = ctx.obj["cfg"]
     sample_dir = _resolve_sample_dir(cfg, ctx.obj["config_path"])
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    console.print("[bold]데이터 로딩 중...[/bold]")
-    raw = load_all(sample_dir)
-    summary = summarize(raw, cfg["thresholds"])
-    print_summary(summary, timestamp)
+    server_proc = _start_llama_server_if_needed(cfg)
+    try:
+        console.print("[bold]데이터 로딩 중...[/bold]")
+        raw = load_all(sample_dir)
+        summary = summarize(raw, cfg["thresholds"])
+        print_summary(summary, timestamp)
 
-    # 전일 비교
-    summary_yd = _load_yesterday(cfg, ctx.obj["config_path"], cfg["thresholds"])
-    comparison = do_compare(summary, summary_yd) if summary_yd else None
-    if comparison:
-        print_comparison(comparison)
+        # 전일 비교
+        summary_yd = _load_yesterday(cfg, ctx.obj["config_path"], cfg["thresholds"])
+        comparison = do_compare(summary, summary_yd) if summary_yd else None
+        if comparison:
+            print_comparison(comparison)
 
-    tpl = _resolve_templates(cfg, ctx.obj["config_path"])
-    llm = _make_llm(cfg, ctx.obj["config_path"])
-    with console.status("[bold]Qwen3 분석 중...[/bold]", spinner="dots"):
-        result = llm.analyze(summary, comparison=comparison)
-    _print_llm_status(result)
-    print_llm_analysis(str(result))
+        tpl = _resolve_templates(cfg, ctx.obj["config_path"])
+        llm = _make_llm(cfg, ctx.obj["config_path"])
+        with console.status("[bold]AI 분석 중...[/bold]", spinner="dots"):
+            result = llm.analyze(summary, comparison=comparison)
+        _print_llm_status(result)
+        print_llm_analysis(str(result))
 
-    if save:
-        path = save_report(summary, str(result), timestamp,
-                           cfg["reports"]["output_dir"], tpl["report"], comparison)
-        console.print(f"[dim]리포트 저장됨: {path}[/dim]")
+        if save:
+            path = save_report(summary, str(result), timestamp,
+                               cfg["reports"]["output_dir"], tpl["report"], comparison)
+            console.print(f"[dim]리포트 저장됨: {path}[/dim]")
+    finally:
+        llama_server.stop(server_proc)
 
 
 CHECK_KEYWORDS = ("일일점검", "점검", "서버 점검", "check", "분석 시작", "점검 시작")
