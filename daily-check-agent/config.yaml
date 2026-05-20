@@ -39,7 +39,7 @@ llama_cpp:
   context_size: 2048
   threads: 4
   temperature: 0.3
-  max_tokens: 512
+  max_tokens: 1024
 
 data:
   sample_dir: "sample_data/today"
