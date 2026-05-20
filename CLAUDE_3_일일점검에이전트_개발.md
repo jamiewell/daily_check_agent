@@ -26,7 +26,7 @@ grafana-ai-agent/
 │   ├── grafana_client.py      # Grafana API 호출
 │   ├── collector.py           # 메트릭/로그 수집
 │   ├── preprocessor.py        # 데이터 전처리/집계
-│   ├── ollama_client.py       # LLM API 클라이언트
+│   ├── llm_client.py          # LLM API 클라이언트
 │   ├── reporter.py            # 리포트 생성 (MD/TXT)
 │   └── notifier.py            # 메일/메신저 발송
 ├── logs/
@@ -42,7 +42,7 @@ grafana-ai-agent/
 | 언어 | Python |
 | HTTP | requests |
 | 데이터 처리 | pandas |
-| LLM | Ollama (외부) / 사내 LLM API (내부) |
+| LLM | llama.cpp + Qwen3-0.6B-Q4_K_M.gguf (외부) / 사내 LLM API (내부) |
 | CLI | argparse / click |
 | 설정 | YAML |
 | 리포트 | Markdown / TXT |
@@ -268,9 +268,9 @@ prompt = f"""
 {json.dumps(summary, ensure_ascii=False, indent=2)}
 """
 
-# Ollama (외부 개발 환경)
-response = requests.post("http://localhost:11434/api/generate",
-    json={"model": "qwen3", "prompt": prompt, "stream": False})
+# llama.cpp (외부 개발 환경 — llama-server가 8080으로 실행 중인 상태)
+response = requests.post("http://localhost:8080/v1/completions",
+    json={"model": "qwen3-0.6b", "prompt": prompt, "stream": False})
 
 # 사내 LLM (내부망 — config.yaml의 주소로 교체)
 response = requests.post(config["llm"]["url"],
@@ -305,7 +305,7 @@ python main.py daily-check --output report_20260504.md
 | 1 | Grafana API 연동 (`grafana_client.py`) | 분석 완료 |
 | 2 | 6개 API 수집 구현 (`collector.py`) | 개발 필요 |
 | 3 | 데이터 전처리/집계 (`preprocessor.py`) | 개발 필요 |
-| 4 | LLM 연동 (`ollama_client.py`) | 개발 필요 |
+| 4 | LLM 연동 (`llm_client.py`) | 개발 필요 |
 | 5 | CLI 구현 (`main.py`) | 개발 필요 |
 | 6 | 리포트 생성 (`reporter.py`) | 개발 필요 |
 | 7 | EXE 패키징 (PyInstaller) | 개발 필요 |

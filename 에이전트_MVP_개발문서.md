@@ -2,7 +2,7 @@
 
 > 목적: 금융시스템 업무PC 일일점검 자동화 데모 및 내부 테스트  
 > 범위: 대화형 구조 + grafana_client.py + preprocessor.py  
-> LLM: Ollama 로컬 (사내 LLM API 확정 전 Ollama로 대체)  
+> LLM: llama.cpp 로컬 (Qwen3-0.6B-Q4_K_M.gguf, 사내 LLM API 확정 전 로컬로 대체)  
 > 제약: 폐쇄망 EXE 배포, 외부 통신 금지
 
 ---
@@ -29,7 +29,7 @@
 | 대화형 CLI | 자연어 질의 → 에이전트 응답 루프 |
 | 일일점검 | 운영 AP/DB 서버 종합 상태 자동 수집·분석 |
 | 단순 질의 | "prautap1 CPU 지금 어때?" 같은 즉석 조회 |
-| LLM 분석 | 전처리 요약 → Ollama → 분석 코멘트 생성 |
+| LLM 분석 | 전처리 요약 → llama.cpp → 분석 코멘트 생성 |
 | 결과 출력 | CLI 출력 + Markdown 파일 저장 |
 
 ### 제외 (MVP 이후)
@@ -47,36 +47,39 @@
 [사용자 자연어 입력]
         │
         ▼
-[main.py — 대화 루프]
-        │
-        ├─ 의도 분류 (Intent Classifier)
-        │       │
-        │       ├─ "일일점검"    ──▶ [grafana_client.py] ──▶ [preprocessor.py] ──▶ [ollama_client.py]
-        │       ├─ "서버 조회"   ──▶ [grafana_client.py] ──▶ [preprocessor.py] ──▶ [ollama_client.py]
-        │       ├─ "리포트 저장" ──▶ [reporter.py]
-        │       └─ "종료"        ──▶ exit
+[Agent — 의도 분류 / 대화 루프]
         │
         ▼
-[결과 출력 (CLI + 선택적 파일 저장)]
-```
-
-### 데이터 흐름
-
-```
-Grafana API 응답 (raw JSON)
-        │
-        ▼  grafana_client.py
-frames 파싱 → {name, timestamps, values, latest, avg, max}
-        │
-        ▼  preprocessor.py
-통계 집계 + 이상 감지 → 압축 요약 텍스트 (~1,500 토큰)
-        │
-        ▼  ollama_client.py
-LLM 프롬프트 조합 → 분석 코멘트 (상태요약 / 원인 / 조치)
+[데이터 수집] ── Grafana API ──▶ raw JSON ──▶ 파싱 · 통계 집계
+        │                                   (avg / max / latest)
         │
         ▼
-CLI 출력 / Markdown 저장
+ ╔══════════════════════════════════════════════════╗
+ ║              LLM 분석 — 코어                     ║
+ ║                                                  ║
+ ║  · 수집 데이터 요약 해석                          ║
+ ║  · 기능 컴포넌트 선택적 연계 · 통합 처리          ║
+ ║  · 컨텍스트 기반 종합 판단 · 조치 권고 생성       ║
+ ║                                                  ║
+ ║  ┌──────────────┐ ┌──────────────┐ ┌──────────┐ ║
+ ║  │   이상 감지  │ │   예측 분석  │ │리포트 생성│ ║
+ ║  │  (Rule 기반) │ │(slope A/B/C) │ │(MD 파일) │ ║
+ ║  │임계값·프로세스│ │ 1h · 3h · 6h│ │  자동저장 │ ║
+ ║  └──────────────┘ └──────────────┘ └──────────┘ ║
+ ║          기능 컴포넌트 (독립 호출 가능)            ║
+ ╚══════════════════════════════════════════════════╝
+        │
+        ▼
+ [터미널 출력 / MD 리포트 저장]
 ```
+
+### 레이어 역할
+
+| 레이어 | 구성 | 역할 |
+|---|---|---|
+| 데이터 수집 | `grafana_client.py` | Grafana API 호출 · raw JSON 파싱 · 단위 변환 |
+| 기능 컴포넌트 | `preprocessor.py` · `forecaster.py` · `reporter.py` | 이상 감지 · 예측 분석 · 리포트 생성 — 각각 독립 호출 가능 |
+| LLM 코어 | `llm_client.py` | 컴포넌트 결과를 통합 해석, 필요 기능을 선택·연계, 자연어 응답 생성 |
 
 ---
 
@@ -124,7 +127,7 @@ class Agent:
         self.config    = load_config()           # config.yaml 로드
         self.client    = GrafanaClient(self.config)
         self.processor = Preprocessor()
-        self.llm       = OllamaClient(self.config)
+        self.llm       = LlmClient(self.config)
         self.context   = {}                      # 마지막 조회 결과 캐시
 
     def handle(self, user_input: str) -> str:
@@ -822,7 +825,7 @@ grafana-ai-agent/
 │   ├── agent.py             ← Agent 클래스 (의도 분류 + 맥락 유지)
 │   ├── grafana_client.py    ← Grafana API 호출 + 파싱
 │   ├── preprocessor.py      ← 통계 집계 + 이상 감지 + LLM용 요약 생성
-│   ├── ollama_client.py     ← Ollama API 호출 + 프롬프트 조합
+│   ├── llm_client.py        ← llama.cpp API 호출 + 프롬프트 조합
 │   └── reporter.py          ← Markdown 파일 저장
 │
 ├── logs/                    ← 실행 로그
@@ -843,10 +846,13 @@ grafana:
   ds_uid: "aenzqagld59fke"
   ds_id:  157
 
-ollama:
-  url:    "http://localhost:11434/api/generate"
-  model:  "qwen3:8b"          # 최소 4B 이상 권장 (0.6B 실측 실패)
-  timeout: 120
+llama_cpp:
+  enabled:    true
+  server_path: "runtime/llama-server.exe"     # Windows EXE 경로
+  model_file:  "runtime/models/qwen3-0.6b-q4_k_m.gguf"
+  host:        "127.0.0.1"
+  port:        8080
+  timeout:     120
 
 agent:
   default_env:  "pr"          # 기본 환경: 운영
@@ -874,7 +880,7 @@ log:
   ✓ 디스크 수집 완료
   ✓ 프로세스 수집 완료
 
-[분석 중] Ollama(qwen3:8b) 분석 요청...
+[분석 중] llama.cpp(Qwen3-0.6B) 분석 요청...
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  2025-05-09 09:00 일일점검 결과
@@ -939,10 +945,10 @@ ds_agent의 메모리 점유가 심야 시간대에 0.99%까지 상승했습니�
 
 ---
 
-## 부록. LLM 프롬프트 구조 (ollama_client.py 참고용)
+## 부록. LLM 프롬프트 구조 (llm_client.py 참고용)
 
 ```python
-# src/ollama_client.py 에서 사용하는 프롬프트 구조
+# src/llm_client.py 에서 사용하는 프롬프트 구조
 
 SYSTEM_PROMPT = """
 당신은 금융 IT 인프라 운영 전문가 AI입니다.
@@ -966,5 +972,5 @@ def build_prompt(summary_text: str) -> str:
 ---
 
 *작성 기준: Grafana API 실측 분석(SQR203~SQR328) + MVP 데모 목적*  
-*LLM: Ollama 로컬 (사내 LLM 확정 시 ollama_client.py URL/model만 교체)*  
+*LLM: llama.cpp 로컬 (Qwen3-0.6B-Q4_K_M.gguf, 사내 LLM 확정 시 llm_client.py URL/model만 교체)*  
 *호스트명 규칙: {{환경(pr/te/dv)}}{{업무코드(aut)}}{{역할(ap/db)}}{{번호(1,2...)}}*

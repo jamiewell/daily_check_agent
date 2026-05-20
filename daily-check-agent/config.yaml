@@ -34,12 +34,9 @@ llama_cpp:
   enabled: true
   host: "127.0.0.1"
   port: 8080
-  # 개발 환경: 절대 경로 직접 지정 (server_exe, lib_dir, model_file 을 절대 경로로)
-  # 패키징 배포: 아래 두 항목 제거하면 runtime/ 폴더 기준으로 자동 탐색
-  server_exe: "~/Downloads/llama-b9190/llama-server"
-  lib_dir: "~/Downloads/llama-b9190"
-  model_file: "~/.ollama/models/blobs/sha256-a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f"
-  context_size: 4096
+  # 패키징 배포: server_exe / lib_dir / model_file 제거 → runtime/ 폴더 기준 자동 탐색
+  model_file: "runtime/models/Qwen3-0.6B-Q4_K_M.gguf"
+  context_size: 2048
   threads: 4
   temperature: 0.3
   max_tokens: 512

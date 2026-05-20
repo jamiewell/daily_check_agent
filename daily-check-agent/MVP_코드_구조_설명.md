@@ -31,10 +31,10 @@ daily-check-agent/
 | 파일 | 역할 |
 |------|------|
 | `main.py` | CLI 명령어 라우팅. 키워드 감지 후 점검 흐름 조율 |
-| `config.yaml` | Ollama URL/모델명, 임계치(%), sample_data 경로 등 설정 |
+| `config.yaml` | llama.cpp 경로/포트, 임계치(%), sample_data 경로 등 설정 |
 | `src/data_loader.py` | JSON 파일 읽기 + 단위 변환 (raw 데이터 → Python dict) |
 | `src/preprocessor.py` | 시계열 avg/max/latest 집계, 임계치 비교, 상태 판정 |
-| `src/llm_client.py` | Ollama REST API 호출. 단발 분석(`analyze`) + 멀티턴 대화(`chat`) |
+| `src/llm_client.py` | llama.cpp REST API 호출. 단발 분석(`analyze`) + 멀티턴 대화(`chat`) |
 | `src/reporter.py` | Rich 터미널 테이블 출력 + MD 리포트 파일 저장 |
 | `sample_data/*.json` | Grafana API 응답 형식을 모사한 테스트 데이터 |
 
@@ -51,7 +51,7 @@ main.py
 
 src/data_loader.py    → sample_data/*.json  (파일 읽기)
 src/preprocessor.py   → config.yaml의 thresholds 값 (main.py가 전달)
-src/llm_client.py     → Ollama HTTP API (http://localhost:11434)
+src/llm_client.py     → llama.cpp HTTP API (http://localhost:8080)
 src/reporter.py       → reports/ 폴더 (파일 쓰기)
 ```
 
@@ -70,7 +70,7 @@ $ python3 main.py chat
         │
         ▼
 main.py — config.yaml 로드
-        — Ollama 클라이언트 초기화
+        — llama.cpp 클라이언트 초기화
         — 대기 상태 진입 (점검 미실행)
         — "You > " 프롬프트 표시
 ```
@@ -84,7 +84,7 @@ You > 안녕?
 main.py — 키워드 감지 안됨
         │
         ▼
-llm_client.chat()  →  Ollama /api/chat  →  Qwen3 응답
+llm_client.chat()  →  llama.cpp /v1/chat/completions  →  Qwen3-0.6B 응답
         │
         ▼
 reporter.print_llm_analysis()  →  터미널 패널 출력
@@ -119,7 +119,7 @@ reporter.print_summary()  →  Rich 테이블로 터미널 출력
         ▼
 llm_client.chat()
   ├── 시스템 메시지에 summary 데이터 JSON 주입
-  └── Ollama /api/chat 호출  →  Qwen3 분석 응답
+  └── llama.cpp /v1/chat/completions 호출  →  Qwen3-0.6B 분석 응답
         │
         ▼
 reporter.print_llm_analysis()  →  분석 결과 패널 출력
@@ -170,7 +170,7 @@ messages = [
 python3 main.py chat      # 대화형 에이전트 (메인 모드)
 python3 main.py check     # 점검 테이블만 출력 (LLM 없음)
 python3 main.py analyze   # 점검 + AI 분석 1회 실행 후 종료
-python3 main.py status    # Ollama 연결 상태 확인
+python3 main.py status    # llama.cpp 연결 상태 확인
 ```
 
 ---
@@ -208,9 +208,9 @@ def load_all(grafana_url: str, token: str) -> dict:
 | 항목 | 내용 |
 |------|------|
 | Python | 3.12 이상 |
-| Ollama | 설치 및 서비스 실행 상태 |
-| qwen3 모델 | `ollama pull qwen3` 완료 |
-| 디스크 여유 | 6 GB 이상 (모델 5.2 GB + 여유) |
+| llama-server | `runtime/llama-server` (또는 `.exe`) 배치 및 실행 상태 |
+| Qwen3 모델 | `runtime/models/qwen3-0.6b-q4_k_m.gguf` 배치 완료 (~380 MB) |
+| 디스크 여유 | 1 GB 이상 |
 
 ---
 
@@ -230,8 +230,8 @@ source .venv/bin/activate
 # 3. 패키지 설치
 pip install -r requirements.txt
 
-# 4. Ollama 서비스 시작
-brew services start ollama
+# 4. llama-server 기동 (별도 터미널)
+./runtime/llama-server -m runtime/models/qwen3-0.6b-q4_k_m.gguf --port 8080
 
 # 5. 실행
 python3 main.py chat
@@ -261,8 +261,8 @@ python -m venv .venv
 # 3. 패키지 설치
 pip install -r requirements.txt
 
-# 4. Ollama 실행 (별도 터미널 또는 백그라운드)
-ollama serve
+# 4. llama-server 기동 (별도 터미널)
+runtime\llama-server.exe -m runtime\models\qwen3-0.6b-q4_k_m.gguf --port 8080
 
 # 5. 실행
 python main.py chat
@@ -293,10 +293,11 @@ chcp 65001
 | `python3 main.py chat` | `python main.py chat` |
 | `source .venv/bin/activate` | `.venv\Scripts\activate` |
 
-**④ Ollama Windows 설치**
+**④ llama-server Windows 설치**
 
-- 다운로드: `https://ollama.com/download/windows`
-- 설치 후 `ollama serve` 또는 시스템 트레이에서 자동 실행
+- [github.com/ggml-org/llama.cpp/releases](https://github.com/ggml-org/llama.cpp/releases) 에서 `llama-<버전>-bin-win-avx2-x64.zip` 다운로드
+- 압축 해제 후 `llama-server.exe` → `runtime\llama-server.exe` 에 복사
+- 모델: [huggingface.co/Qwen/Qwen3-0.6B-GGUF](https://huggingface.co/Qwen/Qwen3-0.6B-GGUF) 에서 `qwen3-0.6b-q4_k_m.gguf` 다운로드 → `runtime\models\` 에 복사
 
 ---
 
@@ -306,7 +307,7 @@ chcp 65001
 |------|-------|---------|
 | Python 명령어 | `python3` | `python` |
 | venv 활성화 | `source .venv/bin/activate` | `.venv\Scripts\activate` |
-| Ollama 시작 | `brew services start ollama` | `ollama serve` |
+| llama-server 시작 | `./runtime/llama-server -m runtime/models/qwen3-0.6b-q4_k_m.gguf --port 8080` | `runtime\llama-server.exe -m runtime\models\qwen3-0.6b-q4_k_m.gguf --port 8080` |
 | 한글 설정 | 불필요 | `chcp 65001` (cmd 한정) |
 | GPU 가속 | Metal (Apple Silicon 자동) | CUDA (NVIDIA GPU 자동) |
 | 권장 터미널 | iTerm2 / 기본 터미널 | Windows Terminal / VSCode |

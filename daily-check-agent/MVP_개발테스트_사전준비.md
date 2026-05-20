@@ -59,26 +59,29 @@ pip install -r requirements.txt
 
 ---
 
-### 1-4. Ollama + Qwen3 설치
+### 1-4. llama.cpp + Qwen3-0.6B 설치
 
-| OS | 설치 방법 |
-|----|-----------|
-| macOS | `brew install ollama` |
-| Windows | https://ollama.com/download/windows |
+| 항목 | 내용 |
+|------|------|
+| llama-server | [github.com/ggml-org/llama.cpp/releases](https://github.com/ggml-org/llama.cpp/releases) 에서 OS별 바이너리 다운로드 |
+| 모델 파일 | [huggingface.co/Qwen/Qwen3-0.6B-GGUF](https://huggingface.co/Qwen/Qwen3-0.6B-GGUF) 에서 `qwen3-0.6b-q4_k_m.gguf` 다운로드 (~380 MB) |
 
 ```bash
-# 모델 다운로드 (5.2 GB — 네트워크 환경에 따라 10~30분 소요)
-ollama pull qwen3
+# runtime 폴더에 배치
+daily-check-agent/
+└── runtime/
+    ├── llama-server          # macOS: llama-server / Windows: llama-server.exe
+    └── models/
+        └── qwen3-0.6b-q4_k_m.gguf
 
-# 서비스 시작
-brew services start ollama   # macOS
-ollama serve                 # Windows (별도 터미널)
+# llama-server 기동 (별도 터미널)
+./runtime/llama-server -m runtime/models/qwen3-0.6b-q4_k_m.gguf --port 8080
 
-# 설치 확인
-ollama list
+# 기동 확인
+curl http://localhost:8080/health
 ```
 
-> **디스크 여유 공간:** 최소 6 GB 필요
+> **디스크 여유 공간:** 최소 1 GB 필요 (모델 ~380 MB)
 
 ---
 
@@ -267,7 +270,7 @@ python3 main.py chat
 - [ ] 저장소 클론 (GitHub PAT 필요)
 - [ ] Python 3.12 설치
 - [ ] 가상환경 생성 및 패키지 설치 (`pip install -r requirements.txt`)
-- [ ] Ollama 설치 + qwen3 모델 다운로드
+- [ ] llama-server 바이너리 + Qwen3-0.6B-Q4_K_M.gguf 다운로드 후 runtime/ 배치
 - [ ] `python3 main.py status` 정상 확인
 
 ### Grafana 연동 테스트 (실 데이터)
@@ -290,6 +293,6 @@ python3 main.py chat
 |------|------|
 | [MVP_코드_구조_설명.md](MVP_코드_구조_설명.md) | 코드 구조 및 파일 참조 관계 |
 | [Python_가상환경_가이드.md](../Python_가상환경_가이드.md) | Python 설치 및 venv 상세 가이드 |
-| [Ollama_Qwen3_설치및사용가이드.md](../Ollama_Qwen3_설치및사용가이드.md) | Ollama 설치 및 모델 관리 |
+| [패키징_가이드.md](패키징_가이드.md) | llama.cpp 설치, GGUF 모델 배치, EXE 패키징 가이드 |
 | [CLAUDE_2_모니터링스택_설치및연동.md](../CLAUDE_2_모니터링스택_설치및연동.md) | EC2 Grafana 스택 설치 내역 |
 | [CLAUDE_3_일일점검에이전트_개발.md](../CLAUDE_3_일일점검에이전트_개발.md) | Grafana API 목록 및 PromQL |

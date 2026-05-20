@@ -23,18 +23,14 @@ PyInstaller spec — daily-check-agent
       사용자는 dist/daily-check-agent/ 폴더 안에서 실행해야 한다.
 """
 
-import os
-
-# runtime/ 폴더가 있을 때만 datas 에 포함 (llama.cpp 모드)
-_runtime_datas = []
-if os.path.isdir('runtime'):
-    _runtime_datas = [('runtime', 'runtime')]
+# runtime/ 은 build.bat 이 dist/ 로 직접 복사 — spec 에서 번들하지 않음
+# (GGUF 모델 파일이 수백MB 이므로 PyInstaller 번들에서 제외해야 빌드 안정)
 
 a = Analysis(
     ['main.py'],
     pathex=['.'],
     binaries=[],
-    datas=_runtime_datas,
+    datas=[],
     hiddenimports=[
         # PyYAML (C 확장 모듈 포함)
         'yaml',

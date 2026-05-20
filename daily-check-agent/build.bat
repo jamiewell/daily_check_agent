@@ -11,6 +11,7 @@ setlocal enabledelayedexpansion
 
 set SCRIPT_DIR=%~dp0
 set VENV_DIR=%SCRIPT_DIR%.venv
+set BUILD_OUT=%TEMP%\dca_build_out
 set DIST_DIR=%SCRIPT_DIR%dist\daily-check-agent
 
 REM ── 1. 가상환경 활성화 ──────────────────────────────────────────────
@@ -29,11 +30,21 @@ pip install -q pyinstaller
 REM ── 3. PyInstaller 빌드 ─────────────────────────────────────────────
 echo [3/5] PyInstaller 빌드
 cd /d "%SCRIPT_DIR%"
-pyinstaller daily_check_agent.spec --clean --noconfirm
-if errorlevel 1 (
-    echo [오류] PyInstaller 빌드 실패
-    exit /b 1
-)
+pyinstaller daily_check_agent.spec --clean --noconfirm --distpath "%BUILD_OUT%"
+if errorlevel 1 goto :build_fail
+
+REM PyInstaller 출력 → dist\ 로 이동
+if exist "%DIST_DIR%" rmdir /s /q "%DIST_DIR%"
+mkdir "%SCRIPT_DIR%dist" 2>nul
+move "%BUILD_OUT%\daily-check-agent" "%DIST_DIR%"
+if errorlevel 1 goto :build_fail
+goto :build_ok
+
+:build_fail
+echo [오류] PyInstaller 빌드 실패
+exit /b 1
+
+:build_ok
 
 REM ── 4. 운영 파일 복사 ───────────────────────────────────────────────
 echo [4/5] 운영 파일 복사
